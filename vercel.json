@@ -1,0 +1,16 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/sync-congress",
+      "schedule": "*/15 13-21 * * 1-5"
+    },
+    {
+      "path": "/api/cron/sync-13f",
+      "schedule": "0 10 * * 1-5"
+    },
+    {
+      "path": "/api/cron/sync-prices",
+      "schedule": "*/5 13-21 * * 1-5"
+    }
+  ]
+}

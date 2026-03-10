@@ -1,0 +1,38 @@
+User-agent: *
+Allow: /
+Allow: /blog
+Allow: /pricing
+Allow: /about
+
+# Block private/authenticated routes from indexing
+Disallow: /dashboard
+Disallow: /politicians
+Disallow: /institutions
+Disallow: /traders
+Disallow: /alerts
+Disallow: /watchlist
+Disallow: /account
+Disallow: /api/
+Disallow: /login
+Disallow: /register
+
+# Block AI training bots
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ChatGPT-User
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Claude-Web
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+Sitemap: https://tradingwatcher.vercel.app/sitemap.xml
