@@ -28,7 +28,7 @@ function rateLimit(ip: string, limit = 100, windowMs = 60_000): boolean {
   return true
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
   // Get client IP
