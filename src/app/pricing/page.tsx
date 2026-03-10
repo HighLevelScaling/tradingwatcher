@@ -3,6 +3,24 @@ import { useState } from "react"
 import Link from "next/link"
 import { Check, X, Star, ChevronDown, ChevronUp, Zap } from "lucide-react"
 
+async function handleCheckout(priceId: string) {
+  if (!priceId) {
+    window.location.href = "/login?callbackUrl=/pricing"
+    return
+  }
+  const res = await fetch("/api/stripe/create-checkout", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ priceId }),
+  })
+  const data = await res.json()
+  if (res.status === 401) {
+    window.location.href = "/login?callbackUrl=/pricing"
+    return
+  }
+  if (data.url) window.location.href = data.url
+}
+
 const FAQS = [
   { q: "Is there a free trial?", a: "Yes! PRO comes with a 7-day free trial. No credit card required to start." },
   { q: "Can I cancel anytime?", a: "Absolutely. Cancel anytime from your account settings. You keep access until the end of your billing period." },
@@ -103,7 +121,7 @@ export default function PricingPage() {
                 </li>
               ))}
             </ul>
-            <Link href="/register" className="block w-full text-center px-4 py-3.5 rounded-xl border border-[#2e2e45] text-slate-200 font-semibold hover:bg-[#1e1e2e] transition-colors">
+            <Link href="/login" className="block w-full text-center px-4 py-3.5 rounded-xl border border-[#2e2e45] text-slate-200 font-semibold hover:bg-[#1e1e2e] transition-colors">
               Get Started Free
             </Link>
           </div>
@@ -139,9 +157,12 @@ export default function PricingPage() {
                 </li>
               ))}
             </ul>
-            <Link href="/register?plan=pro" className="block w-full text-center px-4 py-3.5 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 text-white font-semibold hover:opacity-90 transition-opacity shadow-lg shadow-indigo-500/25">
+            <button
+              onClick={() => handleCheckout(annual ? (process.env.NEXT_PUBLIC_STRIPE_PRO_ANNUAL_PRICE_ID || "") : (process.env.NEXT_PUBLIC_STRIPE_PRO_MONTHLY_PRICE_ID || ""))}
+              className="block w-full text-center px-4 py-3.5 rounded-xl bg-gradient-to-r from-indigo-500 to-violet-500 text-white font-semibold hover:opacity-90 transition-opacity shadow-lg shadow-indigo-500/25"
+            >
               Start 7-Day Free Trial
-            </Link>
+            </button>
             <p className="text-center text-xs text-slate-500 mt-3">No credit card required</p>
           </div>
 
@@ -171,9 +192,12 @@ export default function PricingPage() {
                 </li>
               ))}
             </ul>
-            <Link href="/register?plan=enterprise" className="block w-full text-center px-4 py-3.5 rounded-xl border border-[#2e2e45] text-slate-200 font-semibold hover:bg-[#1e1e2e] transition-colors">
+            <button
+              onClick={() => handleCheckout(process.env.NEXT_PUBLIC_STRIPE_ENTERPRISE_PRICE_ID || "")}
+              className="block w-full text-center px-4 py-3.5 rounded-xl border border-[#2e2e45] text-slate-200 font-semibold hover:bg-[#1e1e2e] transition-colors"
+            >
               Contact Sales
-            </Link>
+            </button>
           </div>
         </div>
 

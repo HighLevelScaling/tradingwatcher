@@ -2,6 +2,7 @@
 import { useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { useSession, signOut } from "next-auth/react"
 import {
   LayoutDashboard, Landmark, Building2, Users, TrendingUp, Bell,
   Bookmark, ChevronLeft, ChevronRight, Menu, X, Search, Zap, LogOut,
@@ -24,6 +25,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const [mobileOpen, setMobileOpen] = useState(false)
   const [userMenuOpen, setUserMenuOpen] = useState(false)
   const pathname = usePathname()
+  const { data: session } = useSession()
+  const userInitial = session?.user?.name?.[0]?.toUpperCase() ?? "U"
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full">
@@ -142,20 +145,31 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <div className="relative">
             <button
               onClick={() => setUserMenuOpen(!userMenuOpen)}
-              className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white font-bold text-sm hover:opacity-90 transition-opacity"
+              className="w-9 h-9 rounded-xl overflow-hidden bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white font-bold text-sm hover:opacity-90 transition-opacity"
             >
-              U
+              {session?.user?.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={session.user.image} alt="Avatar" className="w-full h-full object-cover" />
+              ) : (
+                userInitial
+              )}
             </button>
             {userMenuOpen && (
               <div className="absolute right-0 top-12 w-48 bg-[#12121a] border border-[#2e2e45] rounded-xl shadow-2xl z-50 py-1">
+                {session?.user?.name && (
+                  <div className="px-4 py-2 text-xs text-slate-500 border-b border-[#2e2e45] mb-1 truncate">{session.user.name}</div>
+                )}
                 <Link href="/account" className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-[#1e1e2e] hover:text-white transition-colors">
                   <User className="w-4 h-4" /> Account
                 </Link>
-                <Link href="/billing" className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-[#1e1e2e] hover:text-white transition-colors">
+                <Link href="/account/billing" className="flex items-center gap-2 px-4 py-2.5 text-sm text-slate-300 hover:bg-[#1e1e2e] hover:text-white transition-colors">
                   <CreditCard className="w-4 h-4" /> Billing
                 </Link>
                 <div className="border-t border-[#2e2e45] my-1" />
-                <button className="flex items-center gap-2 px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 w-full transition-colors">
+                <button
+                  onClick={() => signOut({ callbackUrl: "/" })}
+                  className="flex items-center gap-2 px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 w-full transition-colors"
+                >
                   <LogOut className="w-4 h-4" /> Sign out
                 </button>
               </div>
