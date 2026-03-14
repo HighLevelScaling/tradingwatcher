@@ -606,16 +606,45 @@ model Backtest {
 
 model TradingExchange {
   id          String      @id @default(cuid())
-  name        String      // human label e.g. "Binance Main"
-  exchangeId  String      // ccxt exchange id e.g. "binance", "bybit", "kraken"
-  apiKey      String      // stored as-is; encrypt at rest in production
+  name        String
+  exchangeId  String
+  apiKey      String
   secretKey   String
   sandbox     Boolean     @default(true)
   isPrimary   Boolean     @default(false)
   isActive    Boolean     @default(true)
-  label       String?     // optional colour/tag for UI
+  label       String?
+  lastLatencyMs Float?
+  lastLatencyAt DateTime?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
 
   @@map("trading_exchanges")
+}
+
+model KimchiPremium {
+  id          String   @id @default(cuid())
+  premiumPct  Float
+  btcKrw      Float
+  btcUsdt     Float
+  krwPerUsdt  Float
+  signal      String   // STRONG_BULL | BULL | NEUTRAL | BEAR | STRONG_BEAR
+  label       String
+  createdAt   DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("kimchi_premium")
+}
+
+model ExchangeLatency {
+  id          String   @id @default(cuid())
+  exchangeId  String
+  latencyMs   Float
+  tier        String   // EXCELLENT | GOOD | FAIR | POOR | UNREACHABLE
+  success     Boolean
+  error       String?
+  measuredAt  DateTime @default(now())
+
+  @@index([exchangeId, measuredAt])
+  @@map("exchange_latency")
 }

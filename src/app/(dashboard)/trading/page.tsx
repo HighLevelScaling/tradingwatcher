@@ -17,6 +17,9 @@ import { SignalFeed } from '@/components/trading/SignalFeed'
 import { PnLChart } from '@/components/trading/PnLChart'
 import { ArbitrageMonitor } from '@/components/trading/ArbitrageMonitor'
 import { MarketStatus } from '@/components/trading/MarketStatus'
+import SessionIndicator from '@/components/trading/SessionIndicator'
+import KimchiMonitor from '@/components/trading/KimchiMonitor'
+import LatencyMonitor from '@/components/trading/LatencyMonitor'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -341,6 +344,7 @@ export default function TradingPage() {
           cash={pnlSummary.cash}
         />
         <MarketStatus />
+        <SessionIndicator />
 
         {/* Portfolio Stats */}
         <div className="bg-[#0d0d14] border border-[#1e1e2e] rounded-2xl p-5">
@@ -383,8 +387,10 @@ export default function TradingPage() {
         <div className="lg:col-span-2">
           <PnLChart snapshots={snapshots} />
         </div>
-        <div>
+        <div className="space-y-4">
           <ArbitrageMonitor opportunities={arbitrage} />
+          <KimchiMonitor />
+          <LatencyMonitor />
         </div>
       </div>
 

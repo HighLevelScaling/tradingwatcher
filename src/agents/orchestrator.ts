@@ -28,6 +28,13 @@ import {
 import { syncAllOpenTrades, executeSignalForSymbol } from '@/lib/trading/executor'
 import { DEFAULT_RISK_CONFIG } from '@/lib/trading/risk'
 import { Indicators } from '@/lib/trading/indicators'
+import {
+  getCurrentSession,
+  getAdjustedThreshold,
+  getAdjustedArbSpread,
+} from '@/lib/trading/sessions'
+import { fetchKimchiPremium, kimchiSignalMultiplier, kimchiAgreesWithTrade } from '@/lib/trading/kimchi'
+import { measureAllLatencies, arbLatencyCheck, type LatencyMap } from '@/lib/trading/latency'
 
 const DEFAULT_SYMBOLS = [
   'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT',
@@ -152,6 +159,10 @@ export class AgentOrchestrator {
 
   // ─── Main cycle ───────────────────────────────────────────────────────────
 
+  // Session + Kimchi + Latency state — refreshed each cycle
+  private latencyMap: LatencyMap | null = null
+  private kimchiReading: Awaited<ReturnType<typeof fetchKimchiPremium>> = null
+
   async runCycle(): Promise<{ errors: string[]; duration: number }> {
     if (this.isRunning) {
       return { errors: ['Cycle already running'], duration: 0 }
@@ -165,7 +176,27 @@ export class AgentOrchestrator {
     try {
       await this.initialize()
 
-      console.log(`[Orchestrator] Starting cycle #${this.cycleCount}`)
+      const session = getCurrentSession()
+      console.log(
+        `[Orchestrator] Cycle #${this.cycleCount} | Session: ${session.label} ` +
+        `| Threshold: ${session.signalThreshold} | ArbSpread: ${session.arbMinSpreadPct}%`
+      )
+
+      // 0a. Measure latency to all exchanges (every 5 cycles ≈ every 5 min)
+      if (this.cycleCount % 5 === 1) {
+        try {
+          this.latencyMap = await this.runLatencyAgent()
+        } catch (e) {
+          errors.push(`Latency: ${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+
+      // 0b. Fetch Kimchi premium (every cycle — lightweight public API)
+      try {
+        this.kimchiReading = await this.runKimchiAgent()
+      } catch (e) {
+        errors.push(`Kimchi: ${e instanceof Error ? e.message : String(e)}`)
+      }
 
       // 1. Fetch market data
       try {
@@ -181,14 +212,14 @@ export class AgentOrchestrator {
         errors.push(`Signal: ${e instanceof Error ? e.message : String(e)}`)
       }
 
-      // 3. Detect arbitrage
+      // 3. Detect arbitrage (session + latency aware)
       try {
         await this.runArbitrageAgent()
       } catch (e) {
         errors.push(`Arbitrage: ${e instanceof Error ? e.message : String(e)}`)
       }
 
-      // 4. Execute signals
+      // 4. Execute signals (session + kimchi aware)
       try {
         await this.runExecutionAgent()
       } catch (e) {
@@ -209,7 +240,7 @@ export class AgentOrchestrator {
         errors.push(`SnapshotPnL: ${e instanceof Error ? e.message : String(e)}`)
       }
 
-      // 7. Self-test every 15 cycles (approx 15 min at 1-min intervals)
+      // 7. Self-test every 15 cycles
       const minute = new Date().getMinutes()
       if (minute % 15 === 0) {
         try {
@@ -242,6 +273,63 @@ export class AgentOrchestrator {
       `[Orchestrator] Cycle #${this.cycleCount} completed in ${duration}ms. Errors: ${errors.length}`
     )
     return { errors, duration }
+  }
+
+  // ─── Latency Agent ────────────────────────────────────────────────────────
+
+  async runLatencyAgent(): Promise<LatencyMap> {
+    const map = await measureAllLatencies(this.exchanges)
+
+    // Persist to DB
+    for (const r of map.results) {
+      try {
+        await this.db.exchangeLatency.create({
+          data: {
+            exchangeId: r.exchangeId,
+            latencyMs: r.latencyMs,
+            tier: r.tier,
+            success: r.success,
+            error: r.error ?? null,
+            measuredAt: r.measuredAt,
+          },
+        })
+        // Update TradingExchange row if it exists in DB
+        await this.db.tradingExchange.updateMany({
+          where: { exchangeId: r.exchangeId },
+          data: { lastLatencyMs: r.latencyMs, lastLatencyAt: r.measuredAt },
+        })
+      } catch { /* ignore — table may not exist yet */ }
+    }
+
+    const summary = map.results
+      .map((r) => `${r.exchangeId}:${r.latencyMs}ms(${r.tier})`)
+      .join(' | ')
+    console.log(`[Latency] ${summary} | ArbReady: ${map.arbReady}`)
+
+    return map
+  }
+
+  // ─── Kimchi Agent ─────────────────────────────────────────────────────────
+
+  async runKimchiAgent(): Promise<Awaited<ReturnType<typeof fetchKimchiPremium>>> {
+    const reading = await fetchKimchiPremium(this.primary)
+    if (!reading) return null
+
+    try {
+      await this.db.kimchiPremium.create({
+        data: {
+          premiumPct: reading.premiumPct,
+          btcKrw: reading.btcKrw,
+          btcUsdt: reading.btcUsdt,
+          krwPerUsdt: reading.krwPerUsdt,
+          signal: reading.signal,
+          label: reading.label,
+        },
+      })
+    } catch { /* ignore */ }
+
+    console.log(`[Kimchi] ${reading.label}`)
+    return reading
   }
 
   // ─── Market Data Agent ────────────────────────────────────────────────────
@@ -453,13 +541,38 @@ export class AgentOrchestrator {
       const config = agent.config as { pairs?: [string, string][]; zScoreThreshold?: number }
       let opportunities: Awaited<ReturnType<typeof detectCrossExchangeArbitrage>>
 
+      // Session-adjusted minimum spread
+      const sessionArbSpread = getAdjustedArbSpread(config.zScoreThreshold ? 0.3 : 0.3)
+
       if (this.exchanges.length >= 2) {
         // Real cross-exchange arbitrage when multiple exchanges are configured
-        opportunities = await detectCrossExchangeArbitrage(
+        const rawOpps = await detectCrossExchangeArbitrage(
           this.exchanges,
           DEFAULT_CRYPTO_SYMBOLS,
-          0.3
+          sessionArbSpread
         )
+
+        // Filter by latency safety if we have a latency map
+        opportunities = this.latencyMap
+          ? rawOpps.filter((opp) => {
+              const check = arbLatencyCheck(
+                opp.buyExchange,
+                opp.sellExchange,
+                sessionArbSpread,
+                this.latencyMap!
+              )
+              if (!check.proceed) {
+                console.log(`[Arb] Skipped ${opp.symbols.join('↔')} — ${check.reason}`)
+              } else {
+                // Require spread to exceed latency-adjusted threshold
+                if (opp.spreadPct < check.requiredSpreadPct) {
+                  console.log(`[Arb] Spread ${opp.spreadPct.toFixed(2)}% < required ${check.requiredSpreadPct.toFixed(2)}% after latency penalty`)
+                  return false
+                }
+              }
+              return check.proceed
+            })
+          : rawOpps
       } else {
         // Fall back to statistical pairs arbitrage on a single exchange
         const allSymbols = Array.from(new Set((config.pairs ?? DEFAULT_PAIRS).flat()))
@@ -544,7 +657,14 @@ export class AgentOrchestrator {
 
     try {
       const config = agent.config as { signalStrengthThreshold?: number }
-      const threshold = config.signalStrengthThreshold ?? 0.6
+      const baseThreshold = config.signalStrengthThreshold ?? 0.6
+      // Session-aware: blend base config with session recommendation
+      const threshold = getAdjustedThreshold(baseThreshold)
+      const session = getCurrentSession()
+      console.log(
+        `[Execution] Session: ${session.label} | threshold: ${threshold.toFixed(2)} | ` +
+        `kimchi: ${this.kimchiReading?.signal ?? 'N/A'} | sizing: ${session.sizingMultiplier}x`
+      )
 
       const cutoff = new Date(Date.now() - 5 * 60 * 1000)
       const signals = await this.db.tradingSignal.findMany({
@@ -580,6 +700,13 @@ export class AgentOrchestrator {
       let newTradesCount = 0
 
       for (const signal of signals) {
+        // Kimchi filter: skip trades that contradict strong Kimchi signal
+        if (this.kimchiReading && !kimchiAgreesWithTrade(this.kimchiReading, signal.direction as 'BUY' | 'SELL')) {
+          console.log(`[Execution] Kimchi veto: skipping ${signal.direction} on ${signal.symbol} (${this.kimchiReading.signal})`)
+          await this.db.tradingSignal.update({ where: { id: signal.id }, data: { actedOn: true } })
+          continue
+        }
+
         const dbCandles = await this.db.marketCandle.findMany({
           where: { symbol: signal.symbol, timeframe: signal.timeframe },
           orderBy: { timestamp: 'asc' },
@@ -595,6 +722,12 @@ export class AgentOrchestrator {
           volume: c.volume,
         }))
 
+        // Session sizing: scale equity contribution by session multiplier
+        const sessionMultiplier = getCurrentSession().sizingMultiplier
+        // Kimchi multiplier: boosts/reduces position size based on premium signal
+        const kimchiMult = kimchiSignalMultiplier(this.kimchiReading)
+        const adjustedEquity = equity * sessionMultiplier * kimchiMult
+
         const result = await executeSignalForSymbol({
           signal: {
             type: signal.type as 'MOMENTUM' | 'MEAN_REVERSION' | 'BREAKOUT' | 'ARBITRAGE',
@@ -606,7 +739,7 @@ export class AgentOrchestrator {
           },
           symbol: signal.symbol,
           agentId: agent.id,
-          equity,
+          equity: adjustedEquity,
           openPositions: openTrades.length,
           dayPnl,
           candles,
