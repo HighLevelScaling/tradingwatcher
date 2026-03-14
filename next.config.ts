@@ -53,6 +53,8 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   // Enable compression
   compress: true,
+  // CCXT requires transpilation for Next.js compatibility
+  transpilePackages: ['ccxt'],
 }
 
 export default nextConfig
