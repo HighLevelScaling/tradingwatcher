@@ -636,6 +636,58 @@ model KimchiPremium {
   @@map("kimchi_premium")
 }
 
+enum OpeningBoxStatus {
+  WAITING_OPEN_CANDLE
+  WAITING_BREAKOUT
+  WAITING_RETRACEMENT
+  IN_TRADE
+  DONE
+}
+
+model OpeningBoxTrade {
+  id                  String           @id @default(cuid())
+  date                String           // YYYY-MM-DD UTC
+  symbol              String
+  mode                TradingMode      @default(PAPER)
+
+  // Opening box (first 5-min candle)
+  boxTop              Float?
+  boxBottom           Float?
+  boxRange            Float?
+  openCandleTime      DateTime?
+  openCandleOpen      Float?
+  openCandleClose     Float?
+
+  // Breakout
+  breakoutDirection   String?          // LONG | SHORT
+  breakoutCandleClose Float?
+  breakoutTime        DateTime?
+  retracementCandles  Int              @default(0)
+
+  // Trade levels
+  entryPrice          Float?
+  stopLoss            Float?
+  takeProfit          Float?
+
+  // Execution
+  status              OpeningBoxStatus @default(WAITING_OPEN_CANDLE)
+  entryFillPrice      Float?
+  exitPrice           Float?
+  pnl                 Float?
+  pnlPct              Float?
+  exitReason          String?          // TP | SL | INVALIDATED | MANUAL
+  entryAt             DateTime?
+  exitAt              DateTime?
+  orderId             String?
+
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  @@unique([date, symbol, mode])
+  @@index([date])
+  @@map("opening_box_trades")
+}
+
 model ExchangeLatency {
   id          String   @id @default(cuid())
   exchangeId  String

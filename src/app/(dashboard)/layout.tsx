@@ -6,13 +6,14 @@ import { useSession, signOut } from "next-auth/react"
 import {
   LayoutDashboard, Landmark, Building2, Users, TrendingUp, Bell,
   Bookmark, ChevronLeft, ChevronRight, Menu, X, Search, Zap, LogOut,
-  User, CreditCard, Bot, Layers
+  User, CreditCard, Bot, Layers, BoxSelect
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const NAV_ITEMS = [
   { href: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/trading", icon: Bot, label: "Auto Trading" },
+  { href: "/trading/opening-box", icon: BoxSelect, label: "Opening Box" },
   { href: "/trading/exchanges", icon: Layers, label: "Exchanges" },
   { href: "/politicians", icon: Landmark, label: "Congress Trades" },
   { href: "/institutions", icon: Building2, label: "Institutions" },

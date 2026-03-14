@@ -33,6 +33,7 @@ import {
   getAdjustedThreshold,
   getAdjustedArbSpread,
 } from '@/lib/trading/sessions'
+import { OpeningBoxAgent, DEFAULT_OB_SYMBOLS } from './opening-box-agent'
 import { fetchKimchiPremium, kimchiSignalMultiplier, kimchiAgreesWithTrade } from '@/lib/trading/kimchi'
 import { measureAllLatencies, arbLatencyCheck, type LatencyMap } from '@/lib/trading/latency'
 
@@ -162,6 +163,7 @@ export class AgentOrchestrator {
   // Session + Kimchi + Latency state — refreshed each cycle
   private latencyMap: LatencyMap | null = null
   private kimchiReading: Awaited<ReturnType<typeof fetchKimchiPremium>> = null
+  private openingBoxAgent = new OpeningBoxAgent()
 
   async runCycle(): Promise<{ errors: string[]; duration: number }> {
     if (this.isRunning) {
@@ -203,6 +205,13 @@ export class AgentOrchestrator {
         await this.runMarketDataAgent()
       } catch (e) {
         errors.push(`MarketData: ${e instanceof Error ? e.message : String(e)}`)
+      }
+
+      // 1b. Opening Box strategy (one trade per day per symbol)
+      try {
+        await this.openingBoxAgent.run(this.primary, DEFAULT_OB_SYMBOLS, 'PAPER')
+      } catch (e) {
+        errors.push(`OpeningBox: ${e instanceof Error ? e.message : String(e)}`)
       }
 
       // 2. Generate signals
