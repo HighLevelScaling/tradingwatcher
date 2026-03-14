@@ -603,3 +603,19 @@ model Backtest {
 
   @@map("backtests")
 }
+
+model TradingExchange {
+  id          String      @id @default(cuid())
+  name        String      // human label e.g. "Binance Main"
+  exchangeId  String      // ccxt exchange id e.g. "binance", "bybit", "kraken"
+  apiKey      String      // stored as-is; encrypt at rest in production
+  secretKey   String
+  sandbox     Boolean     @default(true)
+  isPrimary   Boolean     @default(false)
+  isActive    Boolean     @default(true)
+  label       String?     // optional colour/tag for UI
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@map("trading_exchanges")
+}

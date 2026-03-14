@@ -12,7 +12,7 @@
 // TypeScript types will be correct once generated. All runtime types are validated by Prisma.
 import { PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
-import { createExchangeClients, type ExchangeClient } from '@/lib/trading/exchange'
+import { createExchangeClients, loadExchangesFromDb, type ExchangeClient } from '@/lib/trading/exchange'
 import { generateAllSignals, type AgentConfig, type Candle } from '@/lib/trading/signals'
 import {
   DEFAULT_MOMENTUM_CONFIG,
@@ -55,15 +55,32 @@ export class AgentOrchestrator {
   }
 
   constructor() {
+    // Start with env-var exchanges only; DB exchanges are merged in initialize()
+    this.prisma = createPrismaClient()
     const { primary, exchanges } = createExchangeClients()
     this.primary = primary
     this.exchanges = exchanges
-    this.prisma = createPrismaClient()
   }
 
   // ─── Initialize: seed default agents ─────────────────────────────────────
 
   async initialize(): Promise<void> {
+    // Merge DB-stored exchanges with env-var exchanges (DB wins on duplicate IDs)
+    try {
+      const dbRows = await this.db.tradingExchange.findMany({
+        where: { isActive: true },
+      })
+      if (dbRows.length > 0) {
+        const dbConfigs = loadExchangesFromDb(dbRows)
+        const { primary, exchanges } = createExchangeClients(dbConfigs)
+        this.primary = primary
+        this.exchanges = exchanges
+        console.log(`[orchestrator] Loaded ${exchanges.length} exchange(s) from DB + env`)
+      }
+    } catch (err) {
+      console.warn('[orchestrator] Could not load exchanges from DB (table may not exist yet):', err)
+    }
+
     const defaultAgents = [
       {
         name: 'Market Data Agent',
