@@ -401,3 +401,205 @@ model SyncLog {
 
   @@map("sync_logs")
 }
+
+// ─────────────────────────────────────────────
+// Autonomous Trading System Models
+// ─────────────────────────────────────────────
+
+enum AgentType {
+  MARKET_DATA
+  SIGNAL
+  ARBITRAGE
+  EXECUTION
+  LEARNING
+  SELF_TEST
+}
+
+enum AgentStatus {
+  IDLE
+  RUNNING
+  PAUSED
+  ERROR
+  STOPPED
+}
+
+enum TradingMode {
+  PAPER
+  LIVE
+}
+
+enum TradeSide {
+  BUY
+  SELL
+}
+
+enum TradeStatus {
+  OPEN
+  CLOSED
+  CANCELLED
+}
+
+enum SignalType {
+  MOMENTUM
+  MEAN_REVERSION
+  BREAKOUT
+  ARBITRAGE
+}
+
+enum ArbitrageType {
+  PAIRS
+  ETF_SPREAD
+  STATISTICAL
+}
+
+enum ArbitrageStatus {
+  DETECTED
+  EXECUTED
+  EXPIRED
+  CLOSED
+}
+
+model TradingAgent {
+  id          String      @id @default(cuid())
+  name        String
+  type        AgentType
+  status      AgentStatus @default(IDLE)
+  mode        TradingMode @default(PAPER)
+  config      Json
+  symbols     String[]
+  totalPnl    Float       @default(0)
+  todayPnl    Float       @default(0)
+  winRate     Float       @default(0)
+  totalTrades Int         @default(0)
+  lastRunAt   DateTime?
+  errorCount  Int         @default(0)
+  lastError   String?
+  isActive    Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  trades    AgentTrade[]
+  signals   TradingSignal[]
+  backtests Backtest[]
+
+  @@map("trading_agents")
+}
+
+model AgentTrade {
+  id            String      @id @default(cuid())
+  agentId       String
+  symbol        String
+  side          TradeSide
+  qty           Float
+  entryPrice    Float
+  exitPrice     Float?
+  stopLoss      Float?
+  takeProfit    Float?
+  status        TradeStatus @default(OPEN)
+  mode          TradingMode
+  pnl           Float?
+  pnlPct        Float?
+  alpacaOrderId String?
+  timeframe     String
+  strategy      String
+  signalData    Json?
+  entryAt       DateTime    @default(now())
+  exitAt        DateTime?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  agent TradingAgent @relation(fields: [agentId], references: [id])
+
+  @@index([agentId])
+  @@index([symbol])
+  @@index([status])
+  @@map("agent_trades")
+}
+
+model PnLSnapshot {
+  id            String      @id @default(cuid())
+  mode          TradingMode
+  totalPnl      Float
+  dayPnl        Float
+  openPositions Int
+  equity        Float
+  cash          Float
+  timestamp     DateTime    @default(now())
+
+  @@index([timestamp])
+  @@map("pnl_snapshots")
+}
+
+model MarketCandle {
+  id        String   @id @default(cuid())
+  symbol    String
+  timeframe String
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float
+  vwap      Float?
+  timestamp DateTime
+
+  @@unique([symbol, timeframe, timestamp])
+  @@index([symbol, timeframe])
+  @@map("market_candles")
+}
+
+model TradingSignal {
+  id         String      @id @default(cuid())
+  agentId    String
+  symbol     String
+  type       SignalType
+  direction  TradeSide
+  strength   Float
+  price      Float
+  indicators Json
+  timeframe  String
+  actedOn    Boolean     @default(false)
+  createdAt  DateTime    @default(now())
+
+  agent TradingAgent @relation(fields: [agentId], references: [id])
+
+  @@index([agentId])
+  @@index([createdAt])
+  @@map("trading_signals")
+}
+
+model ArbitrageOpportunity {
+  id           String           @id @default(cuid())
+  type         ArbitrageType
+  symbols      String[]
+  spreadPct    Float
+  zScore       Float
+  estimatedPnl Float
+  status       ArbitrageStatus  @default(DETECTED)
+  actedOn      Boolean          @default(false)
+  detectedAt   DateTime         @default(now())
+  expiresAt    DateTime?
+  metadata     Json?
+
+  @@index([detectedAt])
+  @@map("arbitrage_opportunities")
+}
+
+model Backtest {
+  id          String      @id @default(cuid())
+  agentId     String
+  strategy    String
+  config      Json
+  startDate   DateTime
+  endDate     DateTime
+  totalReturn Float
+  maxDrawdown Float
+  sharpeRatio Float
+  winRate     Float
+  totalTrades Int
+  results     Json
+  createdAt   DateTime    @default(now())
+
+  agent TradingAgent @relation(fields: [agentId], references: [id])
+
+  @@map("backtests")
+}
