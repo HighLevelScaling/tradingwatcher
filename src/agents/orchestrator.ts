@@ -1,5 +1,5 @@
 /**
- * AgentOrchestrator — the central nervous system of the trading system.
+ * AgentOrchestrator — the central nervous system of the crypto trading system.
  * Coordinates all agents, manages state, and runs the full cycle.
  *
  * Note: Prisma types for new models (TradingAgent, AgentTrade, etc.) are not yet
@@ -12,19 +12,27 @@
 // TypeScript types will be correct once generated. All runtime types are validated by Prisma.
 import { PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
-import { createAlpacaClient, type AlpacaClient } from '@/lib/trading/alpaca'
+import { createExchangeClients, type ExchangeClient } from '@/lib/trading/exchange'
 import { generateAllSignals, type AgentConfig, type Candle } from '@/lib/trading/signals'
 import {
   DEFAULT_MOMENTUM_CONFIG,
   DEFAULT_MEAN_REV_CONFIG,
   DEFAULT_BREAKOUT_CONFIG,
 } from '@/lib/trading/signals'
-import { detectPairsArbitrage, DEFAULT_PAIRS } from '@/lib/trading/arbitrage'
+import {
+  detectCrossExchangeArbitrage,
+  detectPairsArbitrage,
+  DEFAULT_PAIRS,
+  DEFAULT_CRYPTO_SYMBOLS,
+} from '@/lib/trading/arbitrage'
 import { syncAllOpenTrades, executeSignalForSymbol } from '@/lib/trading/executor'
 import { DEFAULT_RISK_CONFIG } from '@/lib/trading/risk'
 import { Indicators } from '@/lib/trading/indicators'
 
-const DEFAULT_SYMBOLS = ['SPY', 'QQQ', 'AAPL', 'NVDA', 'TSLA', 'AMZN', 'MSFT', 'AMD', 'IWM', 'META']
+const DEFAULT_SYMBOLS = [
+  'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT',
+  'XRP/USDT', 'AVAX/USDT', 'LINK/USDT', 'MATIC/USDT',
+]
 const CANDLE_RETENTION = 200
 
 function createPrismaClient(): PrismaClient {
@@ -35,19 +43,21 @@ function createPrismaClient(): PrismaClient {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class AgentOrchestrator {
-  private alpaca: AlpacaClient
+  private primary: ExchangeClient
+  private exchanges: ExchangeClient[]
   private prisma: PrismaClient
   private isRunning: boolean = false
   private cycleCount: number = 0
 
   // Accessor that bypasses stale Prisma typings for newly-added models.
-  // Once `prisma generate` is run against the migrated DB, these types will be available natively.
   private get db(): any {
     return this.prisma
   }
 
   constructor() {
-    this.alpaca = createAlpacaClient()
+    const { primary, exchanges } = createExchangeClients()
+    this.primary = primary
+    this.exchanges = exchanges
     this.prisma = createPrismaClient()
   }
 
@@ -59,7 +69,7 @@ export class AgentOrchestrator {
         name: 'Market Data Agent',
         type: 'MARKET_DATA' as const,
         symbols: DEFAULT_SYMBOLS,
-        config: { timeframes: ['3Min', '5Min'] },
+        config: { timeframes: ['3m', '5m'] },
       },
       {
         name: 'Momentum Agent',
@@ -76,7 +86,7 @@ export class AgentOrchestrator {
       {
         name: 'Arbitrage Agent',
         type: 'ARBITRAGE' as const,
-        symbols: DEFAULT_PAIRS.flat(),
+        symbols: DEFAULT_CRYPTO_SYMBOLS,
         config: { pairs: DEFAULT_PAIRS, zScoreThreshold: 2.0 },
       },
       {
@@ -197,7 +207,7 @@ export class AgentOrchestrator {
         const recentClosedCount = await this.db.agentTrade.count({
           where: {
             status: 'CLOSED',
-            exitAt: { gte: new Date(Date.now() - 60 * 60 * 1000) }, // last hour
+            exitAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
           },
         })
         if (recentClosedCount > 0 && recentClosedCount % 10 === 0) {
@@ -211,7 +221,9 @@ export class AgentOrchestrator {
     }
 
     const duration = Date.now() - start
-    console.log(`[Orchestrator] Cycle #${this.cycleCount} completed in ${duration}ms. Errors: ${errors.length}`)
+    console.log(
+      `[Orchestrator] Cycle #${this.cycleCount} completed in ${duration}ms. Errors: ${errors.length}`
+    )
     return { errors, duration }
   }
 
@@ -229,62 +241,59 @@ export class AgentOrchestrator {
     })
 
     const errors: string[] = []
-    const now = new Date()
-    const start = new Date(now.getTime() - 60 * 60 * 1000 * 4).toISOString() // 4 hours back
 
     try {
-      for (const timeframe of ['3Min', '5Min'] as const) {
+      for (const timeframe of ['3m', '5m'] as const) {
         try {
-          const barsMap = await this.alpaca.getBars({
-            symbols: DEFAULT_SYMBOLS,
-            timeframe,
-            start,
-            limit: CANDLE_RETENTION,
-          })
+          for (const symbol of DEFAULT_SYMBOLS) {
+            try {
+              const bars = await this.primary.getBars(symbol, timeframe, CANDLE_RETENTION)
 
-          for (const [symbol, bars] of barsMap.entries()) {
-            for (const bar of bars) {
-              await this.db.marketCandle.upsert({
-                where: {
-                  symbol_timeframe_timestamp: {
+              for (const bar of bars) {
+                await this.db.marketCandle.upsert({
+                  where: {
+                    symbol_timeframe_timestamp: {
+                      symbol,
+                      timeframe,
+                      timestamp: bar.timestamp,
+                    },
+                  },
+                  update: {
+                    open: bar.open,
+                    high: bar.high,
+                    low: bar.low,
+                    close: bar.close,
+                    volume: bar.volume,
+                    vwap: null,
+                  },
+                  create: {
                     symbol,
                     timeframe,
-                    timestamp: new Date(bar.t),
+                    timestamp: bar.timestamp,
+                    open: bar.open,
+                    high: bar.high,
+                    low: bar.low,
+                    close: bar.close,
+                    volume: bar.volume,
+                    vwap: null,
                   },
-                },
-                update: {
-                  open: bar.o,
-                  high: bar.h,
-                  low: bar.l,
-                  close: bar.c,
-                  volume: bar.v,
-                  vwap: bar.vw ?? null,
-                },
-                create: {
-                  symbol,
-                  timeframe,
-                  timestamp: new Date(bar.t),
-                  open: bar.o,
-                  high: bar.h,
-                  low: bar.l,
-                  close: bar.c,
-                  volume: bar.v,
-                  vwap: bar.vw ?? null,
-                },
-              })
-            }
+                })
+              }
 
-            // Prune old candles — keep only last CANDLE_RETENTION per symbol+timeframe
-            const oldCandles = await this.db.marketCandle.findMany({
-              where: { symbol, timeframe },
-              orderBy: { timestamp: 'desc' },
-              skip: CANDLE_RETENTION,
-              select: { id: true },
-            })
-            if (oldCandles.length > 0) {
-              await this.db.marketCandle.deleteMany({
-                where: { id: { in: oldCandles.map((c) => c.id) } },
+              // Prune old candles
+              const oldCandles = await this.db.marketCandle.findMany({
+                where: { symbol, timeframe },
+                orderBy: { timestamp: 'desc' },
+                skip: CANDLE_RETENTION,
+                select: { id: true },
               })
+              if (oldCandles.length > 0) {
+                await this.db.marketCandle.deleteMany({
+                  where: { id: { in: oldCandles.map((c) => c.id) } },
+                })
+              }
+            } catch (e) {
+              errors.push(`${symbol}/${timeframe}: ${e instanceof Error ? e.message : String(e)}`)
             }
           }
         } catch (e) {
@@ -297,7 +306,7 @@ export class AgentOrchestrator {
         data: {
           status: 'IDLE',
           lastRunAt: new Date(),
-          lastError: errors.length > 0 ? errors.join('; ') : null,
+          lastError: errors.length > 0 ? errors.slice(0, 3).join('; ') : null,
         },
       })
     } catch (e) {
@@ -330,7 +339,7 @@ export class AgentOrchestrator {
         const config = agent.config as AgentConfig & { strategy?: string }
 
         for (const symbol of agent.symbols) {
-          for (const timeframe of ['3Min', '5Min']) {
+          for (const timeframe of ['3m', '5m']) {
             const dbCandles = await this.db.marketCandle.findMany({
               where: { symbol, timeframe },
               orderBy: { timestamp: 'asc' },
@@ -424,42 +433,46 @@ export class AgentOrchestrator {
     })
 
     try {
-      const allSymbols = Array.from(new Set(DEFAULT_PAIRS.flat()))
-      const quotesMap = await this.alpaca.getLatestQuotes(allSymbols)
-
-      const prices: Record<string, number> = {}
-      for (const [symbol, quote] of quotesMap.entries()) {
-        prices[symbol] = quote.last || (quote.bid + quote.ask) / 2
-      }
-
-      // Load candles for ratio history
-      const candlesMap: Record<string, Candle[]> = {}
-      for (const symbol of allSymbols) {
-        const dbCandles = await this.db.marketCandle.findMany({
-          where: { symbol, timeframe: '5Min' },
-          orderBy: { timestamp: 'asc' },
-          take: 50,
-        })
-        candlesMap[symbol] = dbCandles.map((c) => ({
-          timestamp: c.timestamp,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          volume: c.volume,
-        }))
-      }
-
       const config = agent.config as { pairs?: [string, string][]; zScoreThreshold?: number }
-      const opportunities = detectPairsArbitrage(
-        prices,
-        candlesMap,
-        config.pairs ?? DEFAULT_PAIRS,
-        config.zScoreThreshold ?? 2.0
-      )
+      let opportunities: Awaited<ReturnType<typeof detectCrossExchangeArbitrage>>
+
+      if (this.exchanges.length >= 2) {
+        // Real cross-exchange arbitrage when multiple exchanges are configured
+        opportunities = await detectCrossExchangeArbitrage(
+          this.exchanges,
+          DEFAULT_CRYPTO_SYMBOLS,
+          0.3
+        )
+      } else {
+        // Fall back to statistical pairs arbitrage on a single exchange
+        const allSymbols = Array.from(new Set((config.pairs ?? DEFAULT_PAIRS).flat()))
+
+        const prices: Record<string, number> = {}
+        const tickersMap = await this.primary.getTickers(allSymbols)
+        for (const [sym, q] of tickersMap.entries()) {
+          prices[sym] = q.last || (q.bid + q.ask) / 2
+        }
+
+        const candlesMap: Record<string, import('@/lib/trading/exchange').Bar[]> = {}
+        for (const symbol of allSymbols) {
+          try {
+            const bars = await this.primary.getBars(symbol, '5m', 50)
+            candlesMap[symbol] = bars
+          } catch {
+            candlesMap[symbol] = []
+          }
+        }
+
+        opportunities = await detectPairsArbitrage(
+          prices,
+          candlesMap,
+          config.pairs ?? DEFAULT_PAIRS,
+          config.zScoreThreshold ?? 2.0
+        )
+      }
 
       for (const opp of opportunities) {
-        const expiresAt = new Date(Date.now() + 5 * 60 * 1000) // expires in 5 min
+        const expiresAt = new Date(Date.now() + 5 * 60 * 1000)
         await this.db.arbitrageOpportunity.create({
           data: {
             type: opp.type,
@@ -473,6 +486,10 @@ export class AgentOrchestrator {
             metadata: {
               direction: opp.direction,
               confidence: opp.confidence,
+              buyExchange: opp.buyExchange,
+              sellExchange: opp.sellExchange,
+              buyPrice: opp.buyPrice,
+              sellPrice: opp.sellPrice,
               ...(opp.metadata ?? {}),
             },
           },
@@ -512,7 +529,6 @@ export class AgentOrchestrator {
       const config = agent.config as { signalStrengthThreshold?: number }
       const threshold = config.signalStrengthThreshold ?? 0.6
 
-      // Get unacted high-strength signals (last 5 min)
       const cutoff = new Date(Date.now() - 5 * 60 * 1000)
       const signals = await this.db.tradingSignal.findMany({
         where: {
@@ -524,15 +540,14 @@ export class AgentOrchestrator {
         take: 5,
       })
 
-      // Get current account state
-      const account = await this.alpaca.getAccount()
-      const equity = parseFloat(account.equity)
+      // Get current account balance
+      const balance = await this.primary.getBalance()
+      const equity = balance.totalUsdt
 
       const openTrades = await this.db.agentTrade.findMany({
         where: { status: 'OPEN', mode: agent.mode },
       })
 
-      // Today's P&L
       const todayStart = new Date()
       todayStart.setHours(0, 0, 0, 0)
       const todayTrades = await this.db.agentTrade.findMany({
@@ -548,7 +563,6 @@ export class AgentOrchestrator {
       let newTradesCount = 0
 
       for (const signal of signals) {
-        // Get candles for this symbol
         const dbCandles = await this.db.marketCandle.findMany({
           where: { symbol: signal.symbol, timeframe: signal.timeframe },
           orderBy: { timestamp: 'asc' },
@@ -580,7 +594,7 @@ export class AgentOrchestrator {
           dayPnl,
           candles,
           timeframe: signal.timeframe,
-          alpaca: this.alpaca,
+          exchange: this.primary,
           prisma: this.prisma,
           mode: agent.mode as 'PAPER' | 'LIVE',
         })
@@ -589,14 +603,12 @@ export class AgentOrchestrator {
           newTradesCount++
         }
 
-        // Mark signal as acted on regardless of execution success
         await this.db.tradingSignal.update({
           where: { id: signal.id },
           data: { actedOn: true },
         })
       }
 
-      // Update agent metrics
       if (newTradesCount > 0) {
         const allTrades = await this.db.agentTrade.findMany({
           where: { agentId: agent.id, status: 'CLOSED' },
@@ -632,9 +644,8 @@ export class AgentOrchestrator {
   // ─── Sync Trades ──────────────────────────────────────────────────────────
 
   async syncTrades(): Promise<void> {
-    await syncAllOpenTrades({ alpaca: this.alpaca, prisma: this.prisma })
+    await syncAllOpenTrades({ exchange: this.primary, prisma: this.prisma })
 
-    // Refresh agent P&L totals
     const agents = await this.db.tradingAgent.findMany({
       where: { type: 'EXECUTION' },
     })
@@ -667,10 +678,10 @@ export class AgentOrchestrator {
   // ─── Snapshot P&L ─────────────────────────────────────────────────────────
 
   async snapshotPnL(): Promise<void> {
-    const account = await this.alpaca.getAccount()
-    const equity = parseFloat(account.equity)
-    const cash = parseFloat(account.cash)
-    const openPositions = (await this.alpaca.getPositions()).length
+    const balance = await this.primary.getBalance()
+    const equity = balance.totalUsdt
+    const freeUsdt = balance.freeUsdt
+    const openPositions = balance.positions.length
 
     const todayStart = new Date()
     todayStart.setHours(0, 0, 0, 0)
@@ -693,7 +704,7 @@ export class AgentOrchestrator {
         dayPnl,
         openPositions,
         equity,
-        cash,
+        cash: freeUsdt,
       },
     })
   }
@@ -736,7 +747,6 @@ export class AgentOrchestrator {
       )
       const sharpeRatio = stdDev === 0 ? 0 : (avgReturn / stdDev) * Math.sqrt(252)
 
-      // Running drawdown
       let peak = 0
       let maxDrawdown = 0
       let cumulative = 0
@@ -747,7 +757,6 @@ export class AgentOrchestrator {
         if (dd > maxDrawdown) maxDrawdown = dd
       }
 
-      // Grid search for best RSI period using last 30 days candles (SPY as proxy)
       const config = agent.config as {
         rsiPeriods?: number[]
         bbPeriods?: number[]
@@ -759,10 +768,11 @@ export class AgentOrchestrator {
       const bbStdDevs = config.bbStdDevs ?? [1.5, 2.0, 2.5]
 
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
-      const spyCandles = await this.db.marketCandle.findMany({
+      // Use BTC/USDT as the proxy asset for optimization (instead of SPY)
+      const btcCandles = await this.db.marketCandle.findMany({
         where: {
-          symbol: 'SPY',
-          timeframe: '5Min',
+          symbol: 'BTC/USDT',
+          timeframe: '5m',
           timestamp: { gte: thirtyDaysAgo },
         },
         orderBy: { timestamp: 'asc' },
@@ -775,8 +785,8 @@ export class AgentOrchestrator {
         bbStdDev: DEFAULT_MEAN_REV_CONFIG.bbStdDev,
       }
 
-      if (spyCandles.length > 50) {
-        const closes = spyCandles.map((c) => c.close)
+      if (btcCandles.length > 50) {
+        const closes = btcCandles.map((c) => c.close)
 
         for (const rsiPeriod of rsiPeriods) {
           for (const bbPeriod of bbPeriods) {
@@ -787,8 +797,7 @@ export class AgentOrchestrator {
 
                 if (rsiVals.length < 5 || upper.length < 5) continue
 
-                // Simple backtest: count signal quality
-                let signalReturns: number[] = []
+                const signalReturns: number[] = []
                 const minLen = Math.min(rsiVals.length, upper.length)
                 for (let i = 1; i < minLen; i++) {
                   const rsi = rsiVals[rsiVals.length - minLen + i]
@@ -798,14 +807,15 @@ export class AgentOrchestrator {
                   const prevPrice = closes[closes.length - minLen + i - 1]
                   const ret = prevPrice === 0 ? 0 : (price - prevPrice) / prevPrice
 
-                  if (rsi < 30 && price < l) signalReturns.push(ret) // BUY signal
-                  if (rsi > 70 && price > u) signalReturns.push(-ret) // SELL signal
+                  if (rsi < 30 && price < l) signalReturns.push(ret)
+                  if (rsi > 70 && price > u) signalReturns.push(-ret)
                 }
 
                 if (signalReturns.length < 5) continue
                 const meanRet = signalReturns.reduce((a, b) => a + b, 0) / signalReturns.length
                 const sdRet = Math.sqrt(
-                  signalReturns.reduce((a, b) => a + Math.pow(b - meanRet, 2), 0) / signalReturns.length
+                  signalReturns.reduce((a, b) => a + Math.pow(b - meanRet, 2), 0) /
+                    signalReturns.length
                 )
                 const candidateSharpe = sdRet === 0 ? 0 : (meanRet / sdRet) * Math.sqrt(252)
 
@@ -821,20 +831,22 @@ export class AgentOrchestrator {
         }
       }
 
-      // Update signal agents with optimized params
       const signalAgents = await this.db.tradingAgent.findMany({
         where: { type: 'SIGNAL' },
       })
       for (const sa of signalAgents) {
         const oldConfig = sa.config as Record<string, unknown>
-        const updatedConfig = { ...oldConfig, ...bestConfig, lastOptimizedAt: new Date().toISOString() }
+        const updatedConfig = {
+          ...oldConfig,
+          ...bestConfig,
+          lastOptimizedAt: new Date().toISOString(),
+        }
         await this.db.tradingAgent.update({
           where: { id: sa.id },
           data: { config: updatedConfig },
         })
       }
 
-      // Save backtest record
       const signalAgent = signalAgents[0]
       if (signalAgent) {
         await this.db.backtest.create({
@@ -891,10 +903,10 @@ export class AgentOrchestrator {
 
     const testResults: Record<string, { passed: boolean; message: string }> = {}
 
-    // Test 1: Data freshness
+    // Test 1: Data freshness — check BTC/USDT candles
     try {
       const latestCandle = await this.db.marketCandle.findFirst({
-        where: { symbol: 'SPY' },
+        where: { symbol: 'BTC/USDT' },
         orderBy: { timestamp: 'desc' },
       })
       const ageMs = latestCandle ? Date.now() - latestCandle.timestamp.getTime() : Infinity
@@ -903,23 +915,25 @@ export class AgentOrchestrator {
       testResults.dataFreshness = {
         passed,
         message: passed
-          ? `Latest candle is ${ageMins.toFixed(1)} min old — OK`
-          : `Latest candle is ${ageMins.toFixed(1)} min old — STALE`,
+          ? `Latest BTC/USDT candle is ${ageMins.toFixed(1)} min old — OK`
+          : `Latest BTC/USDT candle is ${ageMins.toFixed(1)} min old — STALE`,
       }
     } catch (e) {
-      testResults.dataFreshness = { passed: false, message: `Error: ${e instanceof Error ? e.message : String(e)}` }
+      testResults.dataFreshness = {
+        passed: false,
+        message: `Error: ${e instanceof Error ? e.message : String(e)}`,
+      }
     }
 
-    // Test 2: Alpaca connectivity
+    // Test 2: Exchange connectivity
     try {
-      const account = await this.alpaca.getAccount()
-      const equity = parseFloat(account.equity)
-      testResults.alpacaConnectivity = {
-        passed: equity > 0,
-        message: `Account equity: $${equity.toFixed(2)}`,
+      const balance = await this.primary.getBalance()
+      testResults.exchangeConnectivity = {
+        passed: balance.totalUsdt >= 0,
+        message: `[${this.primary.id}] Balance: ${balance.totalUsdt.toFixed(2)} USDT`,
       }
     } catch (e) {
-      testResults.alpacaConnectivity = {
+      testResults.exchangeConnectivity = {
         passed: false,
         message: `Connection failed: ${e instanceof Error ? e.message : String(e)}`,
       }
@@ -927,7 +941,9 @@ export class AgentOrchestrator {
 
     // Test 3: Indicator sanity — RSI should always be in [0, 100]
     try {
-      const testPrices = [100, 102, 101, 103, 102, 104, 103, 105, 104, 106, 105, 107, 106, 108, 107]
+      const testPrices = [
+        100, 102, 101, 103, 102, 104, 103, 105, 104, 106, 105, 107, 106, 108, 107,
+      ]
       const rsiVals = Indicators.rsi(testPrices, 14)
       const inBounds = rsiVals.every((v) => v >= 0 && v <= 100)
       testResults.indicatorSanity = {
@@ -952,7 +968,7 @@ export class AgentOrchestrator {
         entryPrice: 100,
         stopPrice: 98,
       })
-      const expectedQty = Math.floor((100000 * 0.02) / (100 - 98)) // 1000
+      const expectedQty = Math.floor((100000 * 0.02) / (100 - 98))
       const passed = qty === expectedQty
       testResults.riskCalc = {
         passed,

@@ -5,6 +5,17 @@
 
 import { Indicators } from './indicators'
 
+export const DEFAULT_SYMBOLS = [
+  'BTC/USDT',
+  'ETH/USDT',
+  'SOL/USDT',
+  'BNB/USDT',
+  'XRP/USDT',
+  'AVAX/USDT',
+  'LINK/USDT',
+  'MATIC/USDT',
+]
+
 export type SignalDirection = 'BUY' | 'SELL'
 
 export type SignalType = 'MOMENTUM' | 'MEAN_REVERSION' | 'BREAKOUT' | 'ARBITRAGE'

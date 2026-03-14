@@ -1,15 +1,14 @@
 /**
- * Order execution — bridges signal generation to Alpaca order submission,
+ * Order execution — bridges signal generation to CCXT exchange order submission,
  * and keeps DB trade records in sync with actual order state.
  */
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { PrismaClient } from '@prisma/client'
-import type { AlpacaClient } from './alpaca'
+import type { ExchangeClient } from './exchange'
 import type { SignalResult, Candle } from './signals'
 import { Indicators } from './indicators'
 import {
-  calculatePositionSize,
   calculateStopAndTarget,
   checkRiskLimits,
   DEFAULT_RISK_CONFIG,
@@ -32,10 +31,33 @@ export interface ExecuteSignalParams {
   dayPnl: number
   candles: Candle[]
   timeframe: string
-  alpaca: AlpacaClient
+  exchange: ExchangeClient
   prisma: PrismaClient
   riskConfig?: RiskConfig
   mode: 'PAPER' | 'LIVE'
+}
+
+// ─── Position sizing for crypto ───────────────────────────────────────────────
+
+/**
+ * Calculate position size in base currency (BTC, ETH, etc.).
+ * riskAmount = equity * riskPerTrade
+ * qty = riskAmount / |entry - stopLoss|  (in quote currency, e.g. USDT)
+ */
+export function calculateCryptoPositionSize(params: {
+  equity: number
+  riskPerTrade: number
+  entryPrice: number
+  stopPrice: number
+}): number {
+  const { equity, riskPerTrade, entryPrice, stopPrice } = params
+  const riskAmount = equity * riskPerTrade
+  const priceDiff = Math.abs(entryPrice - stopPrice)
+  if (priceDiff === 0 || entryPrice === 0) return 0
+  // qty in base currency = riskAmount / priceDiff
+  const qty = riskAmount / priceDiff
+  // Round to reasonable precision (8 decimal places for crypto)
+  return Math.max(0, parseFloat(qty.toFixed(8)))
 }
 
 // ─── Execute a single signal ──────────────────────────────────────────────────
@@ -49,7 +71,7 @@ export async function executeSignal(params: ExecuteSignalParams): Promise<Execut
     dayPnl,
     candles,
     timeframe,
-    alpaca,
+    exchange,
     prisma,
     mode,
   } = params
@@ -82,27 +104,32 @@ export async function executeSignal(params: ExecuteSignalParams): Promise<Execut
     config: riskConfig,
   })
 
-  const qty = calculatePositionSize({
+  const qty = calculateCryptoPositionSize({
     equity,
     riskPerTrade: riskConfig.maxRiskPerTrade,
     entryPrice: signal.price,
     stopPrice: stopLoss,
   })
 
-  if (qty < 1) {
-    return { success: false, error: 'Position size calculated as 0 — insufficient equity or risk budget' }
+  if (qty <= 0) {
+    return {
+      success: false,
+      error: 'Position size calculated as 0 — insufficient equity or risk budget',
+    }
+  }
+
+  const symbol = (signal.indicators.symbol as unknown as string) ?? ''
+  if (!symbol) {
+    return { success: false, error: 'No symbol found on signal' }
   }
 
   try {
-    const order = await alpaca.submitOrder({
-      symbol: (signal.indicators.symbol as unknown as string) ?? '',
-      qty,
+    const order = await exchange.submitOrder({
+      symbol,
       side: signal.direction.toLowerCase() as 'buy' | 'sell',
-      type: 'market',
-      time_in_force: 'day',
-      order_class: 'bracket',
-      stop_loss: { stop_price: parseFloat(stopLoss.toFixed(2)) },
-      take_profit: { limit_price: parseFloat(takeProfit.toFixed(2)) },
+      qty,
+      stopLoss,
+      takeProfit,
     })
 
     // Persist trade record
@@ -117,20 +144,21 @@ export async function executeSignal(params: ExecuteSignalParams): Promise<Execut
         takeProfit,
         status: 'OPEN',
         mode: mode as 'PAPER' | 'LIVE',
-        alpacaOrderId: order.id,
+        alpacaOrderId: order.orderId, // field reused for exchange order id
         timeframe,
         strategy: signal.type,
         signalData: {
           strength: signal.strength,
           reason: signal.reason,
           indicators: signal.indicators,
+          exchange: exchange.id,
         },
       },
     })
 
     return {
       success: true,
-      orderId: order.id,
+      orderId: order.orderId,
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -138,13 +166,12 @@ export async function executeSignal(params: ExecuteSignalParams): Promise<Execut
   }
 }
 
-// ─── Execute a signal when symbol is carried on the signal object ─────────────
+// ─── Execute signal with explicit symbol ─────────────────────────────────────
 
 export async function executeSignalForSymbol(
   params: ExecuteSignalParams & { symbol: string }
 ): Promise<ExecutionResult> {
   const { signal, symbol } = params
-  // Inject symbol into indicators so executeSignal can read it
   signal.indicators = { ...signal.indicators, symbol: symbol as unknown as number }
   return executeSignal(params)
 }
@@ -154,51 +181,44 @@ export async function executeSignalForSymbol(
 export async function syncOrderStatus(params: {
   trade: {
     id: string
-    alpacaOrderId: string | null
+    alpacaOrderId: string | null  // stores exchange order id
     entryPrice: number
     qty: number
     side: string
     mode: string
+    symbol: string
   }
-  alpaca: AlpacaClient
+  exchange: ExchangeClient
   prisma: PrismaClient
 }): Promise<void> {
-  const { trade, alpaca, prisma } = params
+  const { trade, exchange, prisma } = params
   if (!trade.alpacaOrderId) return
 
   try {
-    const order = await alpaca.getOrder(trade.alpacaOrderId)
+    const order = await exchange.getOrder(trade.alpacaOrderId, trade.symbol)
 
-    if (order.status === 'filled' || order.status === 'partially_filled') {
-      const filledPrice = order.filled_avg_price ? parseFloat(order.filled_avg_price) : trade.entryPrice
-      const filledQty = order.filled_qty ? parseFloat(order.filled_qty) : trade.qty
+    if (order.status === 'closed' || order.status === 'filled') {
+      const filledPrice = order.avgPrice > 0 ? order.avgPrice : trade.entryPrice
+      const filledQty = order.filled > 0 ? order.filled : trade.qty
 
-      // Determine P&L if this is a closing fill
-      // For bracket orders, Alpaca handles the legs; treat as closed when parent is filled
-      let pnl: number | null = null
-      let pnlPct: number | null = null
-      let status: 'OPEN' | 'CLOSED' | 'CANCELLED' = 'OPEN'
-
-      if (order.status === 'filled') {
-        // Calculate based on entry vs fill price
-        const direction = trade.side === 'BUY' ? 1 : -1
-        pnl = direction * (filledPrice - trade.entryPrice) * filledQty
-        pnlPct = trade.entryPrice === 0 ? 0 : (pnl / (trade.entryPrice * filledQty)) * 100
-        status = 'CLOSED'
-      }
+      const direction = trade.side === 'BUY' ? 1 : -1
+      const pnl = direction * (filledPrice - trade.entryPrice) * filledQty
+      const pnlPct =
+        trade.entryPrice === 0 ? 0 : (pnl / (trade.entryPrice * filledQty)) * 100
 
       await (prisma as any).agentTrade.update({
         where: { id: trade.id },
         data: {
           exitPrice: filledPrice,
-          status,
+          status: 'CLOSED',
           pnl,
           pnlPct,
-          exitAt: status === 'CLOSED' ? new Date() : undefined,
+          exitAt: new Date(),
         },
       })
     } else if (
       order.status === 'canceled' ||
+      order.status === 'cancelled' ||
       order.status === 'expired' ||
       order.status === 'rejected'
     ) {
@@ -212,14 +232,14 @@ export async function syncOrderStatus(params: {
   }
 }
 
-// ─── Sync all open trades for an agent ───────────────────────────────────────
+// ─── Sync all open trades ─────────────────────────────────────────────────────
 
 export async function syncAllOpenTrades(params: {
   agentId?: string
-  alpaca: AlpacaClient
+  exchange: ExchangeClient
   prisma: PrismaClient
 }): Promise<void> {
-  const { agentId, alpaca, prisma } = params
+  const { agentId, exchange, prisma } = params
 
   const where = agentId
     ? { status: 'OPEN' as const, agentId, alpacaOrderId: { not: null as unknown as string } }
@@ -229,7 +249,7 @@ export async function syncAllOpenTrades(params: {
 
   await Promise.allSettled(
     openTrades.map((trade: any) =>
-      syncOrderStatus({ trade, alpaca, prisma })
+      syncOrderStatus({ trade: { ...trade, symbol: trade.symbol ?? '' }, exchange, prisma })
     )
   )
 }

@@ -280,7 +280,7 @@ export default function TradingPage() {
             <Bot className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-white">Autonomous Trading System</h1>
+            <h1 className="text-xl font-bold text-white">Autonomous Crypto Trading System</h1>
             <div className="flex items-center gap-3 mt-0.5">
               <div className="flex items-center gap-1.5">
                 <motion.div
@@ -288,13 +288,17 @@ export default function TradingPage() {
                   animate={{ opacity: [1, 0.3, 1] }}
                   transition={{ duration: 2, repeat: Infinity }}
                 />
-                <span className="text-xs text-sky-400 font-medium">Test Farm (Paper)</span>
+                <span className="text-xs text-sky-400 font-medium">Test Farm (Paper — exchange testnet)</span>
               </div>
               <span className="text-xs text-slate-600">|</span>
               <div className="flex items-center gap-1.5">
                 <div className="w-1.5 h-1.5 rounded-full bg-orange-400/50" />
                 <span className="text-xs text-slate-500">Live Trading: Off</span>
               </div>
+              <span className="text-xs text-slate-600">|</span>
+              <span className="text-xs text-slate-500">
+                BTC/USDT · ETH/USDT · SOL/USDT · BNB/USDT · XRP/USDT · AVAX/USDT
+              </span>
               {lastUpdate && (
                 <>
                   <span className="text-xs text-slate-600">|</span>
@@ -350,12 +354,12 @@ export default function TradingPage() {
               { label: 'Active Agents', value: activeAgents, color: 'text-green-400' },
               {
                 label: 'Total Agent P&L',
-                value: `${totalAgentPnl >= 0 ? '+' : ''}$${totalAgentPnl.toFixed(2)}`,
+                value: `${totalAgentPnl >= 0 ? '+' : ''}${totalAgentPnl.toFixed(2)} USDT`,
                 color: totalAgentPnl >= 0 ? 'text-green-400' : 'text-red-400',
               },
               {
                 label: 'Today Agent P&L',
-                value: `${pnlSummary.dayPnl >= 0 ? '+' : ''}$${pnlSummary.dayPnl.toFixed(2)}`,
+                value: `${pnlSummary.dayPnl >= 0 ? '+' : ''}${pnlSummary.dayPnl.toFixed(2)} USDT`,
                 color: pnlSummary.dayPnl >= 0 ? 'text-green-400' : 'text-red-400',
               },
             ].map((stat) => (
@@ -369,7 +373,7 @@ export default function TradingPage() {
           {/* System activity indicator */}
           <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
             <Activity className="w-3.5 h-3.5" />
-            <span>SSE stream active — updates every 3s</span>
+            <span>SSE stream active — updates every 3s · 24/7 crypto</span>
           </div>
         </div>
       </div>
