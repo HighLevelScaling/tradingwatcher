@@ -36,6 +36,10 @@ import {
 import { OpeningBoxAgent, DEFAULT_OB_SYMBOLS } from './opening-box-agent'
 import { fetchKimchiPremium, kimchiSignalMultiplier, kimchiAgreesWithTrade } from '@/lib/trading/kimchi'
 import { measureAllLatencies, arbLatencyCheck, type LatencyMap } from '@/lib/trading/latency'
+import { decrypt, isEncrypted } from '@/lib/crypto'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('orchestrator')
 
 const DEFAULT_SYMBOLS = [
   'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT',
@@ -79,14 +83,19 @@ export class AgentOrchestrator {
         where: { isActive: true },
       })
       if (dbRows.length > 0) {
-        const dbConfigs = loadExchangesFromDb(dbRows)
+        const decryptedRows = dbRows.map((row: any) => ({
+          ...row,
+          apiKey: isEncrypted(row.apiKey) ? decrypt(row.apiKey) : row.apiKey,
+          secretKey: isEncrypted(row.secretKey) ? decrypt(row.secretKey) : row.secretKey,
+        }))
+        const dbConfigs = loadExchangesFromDb(decryptedRows)
         const { primary, exchanges } = createExchangeClients(dbConfigs)
         this.primary = primary
         this.exchanges = exchanges
-        console.log(`[orchestrator] Loaded ${exchanges.length} exchange(s) from DB + env`)
+        log.info(`Loaded ${exchanges.length} exchange(s) from DB + env`)
       }
     } catch (err) {
-      console.warn('[orchestrator] Could not load exchanges from DB (table may not exist yet):', err)
+      log.warn('Could not load exchanges from DB (table may not exist yet)', { error: String(err) })
     }
 
     const defaultAgents = [

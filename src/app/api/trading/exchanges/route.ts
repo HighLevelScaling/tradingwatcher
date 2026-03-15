@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { encrypt } from '@/lib/crypto'
 
 // GET /api/trading/exchanges — list all configured exchanges
 export async function GET() {
@@ -44,8 +45,8 @@ export async function POST(req: NextRequest) {
     data: {
       name,
       exchangeId: exchangeId.toLowerCase().trim(),
-      apiKey,
-      secretKey,
+      apiKey: encrypt(apiKey),
+      secretKey: encrypt(secretKey),
       sandbox: sandbox ?? true,
       isPrimary: isPrimary ?? false,
       isActive: true,

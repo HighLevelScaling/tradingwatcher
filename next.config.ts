@@ -1,4 +1,5 @@
 import type { NextConfig } from "next"
+import { withSentryConfig } from "@sentry/nextjs"
 
 const securityHeaders = [
   // Prevent clickjacking
@@ -25,7 +26,7 @@ const securityHeaders = [
       "font-src 'self' https://fonts.gstatic.com",
       "img-src 'self' data: blob: https://lh3.googleusercontent.com https://avatars.githubusercontent.com",
       "frame-src https://js.stripe.com https://hooks.stripe.com https://accounts.google.com",
-      "connect-src 'self' https://api.stripe.com https://accounts.google.com",
+      "connect-src 'self' https://api.stripe.com https://accounts.google.com https://*.ingest.sentry.io",
       "object-src 'none'",
       "base-uri 'self'",
       "form-action 'self'",
@@ -57,4 +58,7 @@ const nextConfig: NextConfig = {
   transpilePackages: ['ccxt'],
 }
 
-export default nextConfig
+export default withSentryConfig(nextConfig, {
+  silent: true,
+  disableLogger: true,
+})
