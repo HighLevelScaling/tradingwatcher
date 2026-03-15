@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/sync-prices",
       "schedule": "0 15 * * 1-5"
+    },
+    {
+      "path": "/api/cron/trading",
+      "schedule": "* 9-16 * * 1-5"
     }
   ]
 }
