@@ -6,6 +6,8 @@ interface LogEntry {
   context: string
   timestamp: string
   data?: Record<string, unknown>
+  error?: string
+  stack?: string
 }
 
 const LEVEL_PRIORITY: Record<LogLevel, number> = {
@@ -29,10 +31,11 @@ function formatEntry(entry: LogEntry): string {
   const color = { debug: '\x1b[90m', info: '\x1b[36m', warn: '\x1b[33m', error: '\x1b[31m' }[entry.level]
   const reset = '\x1b[0m'
   const dataStr = entry.data ? ` ${JSON.stringify(entry.data)}` : ''
-  return `${color}[${entry.level.toUpperCase()}]${reset} [${entry.context}] ${entry.message}${dataStr}`
+  const errorStr = entry.error ? ` | ${entry.error}` : ''
+  return `${color}[${entry.level.toUpperCase()}]${reset} [${entry.context}] ${entry.message}${errorStr}${dataStr}`
 }
 
-function log(level: LogLevel, context: string, message: string, data?: Record<string, unknown>) {
+function log(level: LogLevel, context: string, message: string, data?: Record<string, unknown>, error?: unknown) {
   if (!shouldLog(level)) return
   const entry: LogEntry = {
     level,
@@ -40,6 +43,12 @@ function log(level: LogLevel, context: string, message: string, data?: Record<st
     context,
     timestamp: new Date().toISOString(),
     ...(data && { data }),
+  }
+  if (error) {
+    entry.error = error instanceof Error ? error.message : String(error)
+    if (error instanceof Error && error.stack) {
+      entry.stack = error.stack
+    }
   }
   const output = formatEntry(entry)
   if (level === 'error') {
@@ -56,6 +65,8 @@ export function createLogger(context: string) {
     debug: (message: string, data?: Record<string, unknown>) => log('debug', context, message, data),
     info: (message: string, data?: Record<string, unknown>) => log('info', context, message, data),
     warn: (message: string, data?: Record<string, unknown>) => log('warn', context, message, data),
-    error: (message: string, data?: Record<string, unknown>) => log('error', context, message, data),
+    error: (message: string, error?: unknown, data?: Record<string, unknown>) => log('error', context, message, data, error),
   }
 }
+
+export type Logger = ReturnType<typeof createLogger>

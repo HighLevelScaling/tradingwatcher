@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const limit = parseInt(searchParams.get('limit') ?? '10', 10)
 
-    const opportunities = await (prisma as any).arbitrageOpportunity.findMany({
+    const opportunities = await prisma.arbitrageOpportunity.findMany({
       orderBy: { detectedAt: 'desc' },
       take: Math.min(limit, 50),
     })

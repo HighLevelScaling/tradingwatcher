@@ -20,6 +20,7 @@ import { MarketStatus } from '@/components/trading/MarketStatus'
 import SessionIndicator from '@/components/trading/SessionIndicator'
 import KimchiMonitor from '@/components/trading/KimchiMonitor'
 import LatencyMonitor from '@/components/trading/LatencyMonitor'
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -385,12 +386,20 @@ export default function TradingPage() {
       {/* Row 2: P&L Chart + Arbitrage */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
-          <PnLChart snapshots={snapshots} />
+          <ErrorBoundary module="PnLChart">
+            <PnLChart snapshots={snapshots} />
+          </ErrorBoundary>
         </div>
         <div className="space-y-4">
-          <ArbitrageMonitor opportunities={arbitrage} />
-          <KimchiMonitor />
-          <LatencyMonitor />
+          <ErrorBoundary module="Arbitrage">
+            <ArbitrageMonitor opportunities={arbitrage} />
+          </ErrorBoundary>
+          <ErrorBoundary module="Kimchi">
+            <KimchiMonitor />
+          </ErrorBoundary>
+          <ErrorBoundary module="Latency">
+            <LatencyMonitor />
+          </ErrorBoundary>
         </div>
       </div>
 
@@ -401,29 +410,35 @@ export default function TradingPage() {
           <span className="text-sm font-semibold text-white">Trading Agents</span>
           <span className="text-xs text-slate-500">({agents.length} total)</span>
         </div>
-        {agents.length === 0 ? (
-          <div className="bg-[#0d0d14] border border-[#1e1e2e] rounded-2xl p-8 text-center text-slate-500">
-            <Bot className="w-10 h-10 mx-auto mb-3 opacity-30" />
-            <p className="text-sm">No agents initialized yet</p>
-            <p className="text-xs mt-1">Click &quot;Run Cycle&quot; to bootstrap the system</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-            {agents.map((agent) => (
-              <AgentCard
-                key={agent.id}
-                agent={agent as Parameters<typeof AgentCard>[0]['agent']}
-                onToggle={handleAgentToggle}
-              />
-            ))}
-          </div>
-        )}
+        <ErrorBoundary module="Agents">
+          {agents.length === 0 ? (
+            <div className="bg-[#0d0d14] border border-[#1e1e2e] rounded-2xl p-8 text-center text-slate-500">
+              <Bot className="w-10 h-10 mx-auto mb-3 opacity-30" />
+              <p className="text-sm">No agents initialized yet</p>
+              <p className="text-xs mt-1">Click &quot;Run Cycle&quot; to bootstrap the system</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+              {agents.map((agent) => (
+                <AgentCard
+                  key={agent.id}
+                  agent={agent as Parameters<typeof AgentCard>[0]['agent']}
+                  onToggle={handleAgentToggle}
+                />
+              ))}
+            </div>
+          )}
+        </ErrorBoundary>
       </div>
 
       {/* Row 4: Trade Feed + Signal Feed */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <TradeFeed trades={trades} />
-        <SignalFeed signals={signals} />
+        <ErrorBoundary module="TradeFeed">
+          <TradeFeed trades={trades} />
+        </ErrorBoundary>
+        <ErrorBoundary module="SignalFeed">
+          <SignalFeed signals={signals} />
+        </ErrorBoundary>
       </div>
     </div>
   )

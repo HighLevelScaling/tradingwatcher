@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
     if (mode && (mode === 'PAPER' || mode === 'LIVE')) where.mode = mode
     if (status) where.status = status
 
-    const trades = await (prisma as any).agentTrade.findMany({
+    const trades = await prisma.agentTrade.findMany({
       where,
       orderBy: { createdAt: 'desc' },
       take: Math.min(limit, 200),

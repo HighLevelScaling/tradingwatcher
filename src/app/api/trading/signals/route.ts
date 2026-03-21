@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url)
     const limit = parseInt(searchParams.get('limit') ?? '20', 10)
 
-    const signals = await (prisma as any).tradingSignal.findMany({
+    const signals = await prisma.tradingSignal.findMany({
       orderBy: { createdAt: 'desc' },
       take: Math.min(limit, 100),
       include: {

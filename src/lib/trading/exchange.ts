@@ -11,7 +11,7 @@
  * kucoin, gate, bitget, mexc, huobi, and hundreds more.
  */
 
-import ccxt from 'ccxt'
+import ccxt, { type Exchange as CcxtExchange, type Ticker as CcxtTicker, type Position as CcxtPosition, type Order as CcxtOrder } from 'ccxt'
 
 // Any string is valid — CCXT has 250+ exchange IDs
 export type ExchangeId = string
@@ -68,7 +68,7 @@ export interface OrderResult {
 // ─── Exchange Client ───────────────────────────────────────────────────────────
 
 export class ExchangeClient {
-  private exchange: ccxt.Exchange
+  private exchange: CcxtExchange
   public readonly id: ExchangeId
   public readonly label: string
   public readonly sandbox: boolean
@@ -80,7 +80,7 @@ export class ExchangeClient {
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const exchangeClass = (ccxt as any)[config.id] as
-      | (new (params: Record<string, unknown>) => ccxt.Exchange)
+      | (new (params: Record<string, unknown>) => CcxtExchange)
       | undefined
 
     if (!exchangeClass) {
@@ -110,19 +110,22 @@ export class ExchangeClient {
   async getBalance(): Promise<AccountBalance> {
     try {
       const balance = await this.exchange.fetchBalance()
-      const totalUsdt = (balance.total?.USDT as number) ?? 0
-      const freeUsdt = (balance.free?.USDT as number) ?? 0
+      const balanceAny = balance as Record<string, unknown>
+      const total = balanceAny.total as Record<string, number> | undefined
+      const free = balanceAny.free as Record<string, number> | undefined
+      const totalUsdt = total?.USDT ?? 0
+      const freeUsdt = free?.USDT ?? 0
 
       let positions: AccountBalance['positions'] = []
       try {
         const raw = await this.exchange.fetchPositions()
         positions = raw
-          .filter((p) => p.contracts && (p.contracts as number) !== 0)
-          .map((p) => ({
+          .filter((p: CcxtPosition) => p.contracts && p.contracts !== 0)
+          .map((p: CcxtPosition) => ({
             symbol: p.symbol,
-            size: (p.contracts as number) ?? 0,
-            entryPrice: (p.entryPrice as number) ?? 0,
-            unrealizedPnl: (p.unrealizedPnl as number) ?? 0,
+            size: p.contracts ?? 0,
+            entryPrice: p.entryPrice ?? 0,
+            unrealizedPnl: p.unrealizedPnl ?? 0,
           }))
       } catch {
         // Spot-only exchanges don't expose positions
@@ -180,14 +183,14 @@ export class ExchangeClient {
     try {
       const tickers = await this.exchange.fetchTickers(symbols)
       const result = new Map<string, Quote>()
-      for (const [sym, t] of Object.entries(tickers)) {
+      for (const [sym, t] of Object.entries(tickers) as [string, CcxtTicker][]) {
         result.set(sym, {
           symbol: sym,
           exchange: this.id,
-          bid: (t.bid as number) ?? 0,
-          ask: (t.ask as number) ?? 0,
-          last: (t.last as number) ?? 0,
-          timestamp: t.timestamp ? new Date(t.timestamp as number) : new Date(),
+          bid: t.bid ?? 0,
+          ask: t.ask ?? 0,
+          last: t.last ?? 0,
+          timestamp: t.timestamp ? new Date(t.timestamp) : new Date(),
         })
       }
       return result
@@ -283,12 +286,12 @@ export class ExchangeClient {
   async getOpenOrders(symbol?: string): Promise<OrderResult[]> {
     try {
       const orders = await this.exchange.fetchOpenOrders(symbol)
-      return orders.map((o) => ({
+      return orders.map((o: CcxtOrder) => ({
         orderId: o.id,
         symbol: o.symbol,
         side: (o.side as 'buy' | 'sell') ?? 'buy',
-        qty: (o.amount as number) ?? 0,
-        price: (o.price as number) ?? undefined,
+        qty: o.amount ?? 0,
+        price: o.price ?? undefined,
         status: o.status ?? 'open',
         exchange: this.id,
       }))

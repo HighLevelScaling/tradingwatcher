@@ -9,13 +9,13 @@ export async function GET(request: NextRequest) {
     const hours = parseInt(searchParams.get('hours') ?? '24', 10)
     const since = new Date(Date.now() - hours * 60 * 60 * 1000)
 
-    const snapshots = await (prisma as any).pnLSnapshot.findMany({
+    const snapshots = await prisma.pnLSnapshot.findMany({
       where: { timestamp: { gte: since } },
       orderBy: { timestamp: 'asc' },
     })
 
     // Latest snapshot for summary
-    const latest = await (prisma as any).pnLSnapshot.findFirst({
+    const latest = await prisma.pnLSnapshot.findFirst({
       orderBy: { timestamp: 'desc' },
     })
 

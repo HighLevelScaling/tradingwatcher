@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { encrypt } from '@/lib/crypto'
 
 // GET /api/trading/exchanges — list all configured exchanges

@@ -270,7 +270,7 @@ function PnLSparkline({ history }: { history: OBTrade[] }) {
           <YAxis tick={{ fontSize: 9, fill: "#475569" }} tickLine={false} axisLine={false} tickFormatter={(v) => `${v.toFixed(1)}%`} />
           <Tooltip
             contentStyle={{ background: "#12121a", border: "1px solid #2e2e45", borderRadius: 8, fontSize: 11 }}
-            formatter={(v: number, name: string) => [`${v.toFixed(2)}%`, name === "pnl" ? "Trade" : "Cumulative"]}
+            formatter={((v: number, name: string) => [`${v.toFixed(2)}%`, name === "pnl" ? "Trade" : "Cumulative"]) as never}
           />
           <ReferenceLine y={0} stroke="#334155" strokeDasharray="3 3" />
           <Bar dataKey="pnl" radius={[2, 2, 0, 0]}>

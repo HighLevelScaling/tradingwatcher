@@ -1,16 +1,9 @@
 /**
  * AgentOrchestrator — the central nervous system of the crypto trading system.
  * Coordinates all agents, manages state, and runs the full cycle.
- *
- * Note: Prisma types for new models (TradingAgent, AgentTrade, etc.) are not yet
- * reflected in the generated client until `prisma generate` is re-run against the DB.
- * We use `(prisma as any)` to access the new models until that step is completed.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-// @ts-nocheck — New Prisma models are in schema but require `prisma generate` after migration.
-// TypeScript types will be correct once generated. All runtime types are validated by Prisma.
-import { PrismaClient } from '@prisma/client'
+import { Prisma, PrismaClient } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
 import { createExchangeClients, loadExchangesFromDb, type ExchangeClient } from '@/lib/trading/exchange'
 import { generateAllSignals, type AgentConfig, type Candle } from '@/lib/trading/signals'
@@ -61,11 +54,6 @@ export class AgentOrchestrator {
   private isRunning: boolean = false
   private cycleCount: number = 0
 
-  // Accessor that bypasses stale Prisma typings for newly-added models.
-  private get db(): any {
-    return this.prisma
-  }
-
   constructor() {
     // Start with env-var exchanges only; DB exchanges are merged in initialize()
     this.prisma = createPrismaClient()
@@ -79,7 +67,7 @@ export class AgentOrchestrator {
   async initialize(): Promise<void> {
     // Merge DB-stored exchanges with env-var exchanges (DB wins on duplicate IDs)
     try {
-      const dbRows = await this.db.tradingExchange.findMany({
+      const dbRows = await this.prisma.tradingExchange.findMany({
         where: { isActive: true },
       })
       if (dbRows.length > 0) {
@@ -150,13 +138,16 @@ export class AgentOrchestrator {
     ]
 
     for (const agentDef of defaultAgents) {
-      const existing = await this.db.tradingAgent.findFirst({
+      const existing = await this.prisma.tradingAgent.findFirst({
         where: { name: agentDef.name },
       })
       if (!existing) {
-        await this.db.tradingAgent.create({
+        await this.prisma.tradingAgent.create({
           data: {
-            ...agentDef,
+            name: agentDef.name,
+            type: agentDef.type,
+            symbols: agentDef.symbols,
+            config: agentDef.config as unknown as Prisma.InputJsonValue,
             status: 'IDLE',
             mode: 'PAPER',
             isActive: true,
@@ -270,7 +261,7 @@ export class AgentOrchestrator {
 
       // 8. Learning agent after every 10 closed trades
       try {
-        const recentClosedCount = await this.db.agentTrade.count({
+        const recentClosedCount = await this.prisma.agentTrade.count({
           where: {
             status: 'CLOSED',
             exitAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
@@ -301,7 +292,7 @@ export class AgentOrchestrator {
     // Persist to DB
     for (const r of map.results) {
       try {
-        await this.db.exchangeLatency.create({
+        await this.prisma.exchangeLatency.create({
           data: {
             exchangeId: r.exchangeId,
             latencyMs: r.latencyMs,
@@ -312,7 +303,7 @@ export class AgentOrchestrator {
           },
         })
         // Update TradingExchange row if it exists in DB
-        await this.db.tradingExchange.updateMany({
+        await this.prisma.tradingExchange.updateMany({
           where: { exchangeId: r.exchangeId },
           data: { lastLatencyMs: r.latencyMs, lastLatencyAt: r.measuredAt },
         })
@@ -334,7 +325,7 @@ export class AgentOrchestrator {
     if (!reading) return null
 
     try {
-      await this.db.kimchiPremium.create({
+      await this.prisma.kimchiPremium.create({
         data: {
           premiumPct: reading.premiumPct,
           btcKrw: reading.btcKrw,
@@ -353,12 +344,12 @@ export class AgentOrchestrator {
   // ─── Market Data Agent ────────────────────────────────────────────────────
 
   async runMarketDataAgent(): Promise<void> {
-    const agent = await this.db.tradingAgent.findFirst({
+    const agent = await this.prisma.tradingAgent.findFirst({
       where: { type: 'MARKET_DATA' },
     })
     if (!agent) return
 
-    await this.db.tradingAgent.update({
+    await this.prisma.tradingAgent.update({
       where: { id: agent.id },
       data: { status: 'RUNNING' },
     })
@@ -373,7 +364,7 @@ export class AgentOrchestrator {
               const bars = await this.primary.getBars(symbol, timeframe, CANDLE_RETENTION)
 
               for (const bar of bars) {
-                await this.db.marketCandle.upsert({
+                await this.prisma.marketCandle.upsert({
                   where: {
                     symbol_timeframe_timestamp: {
                       symbol,
@@ -404,14 +395,14 @@ export class AgentOrchestrator {
               }
 
               // Prune old candles
-              const oldCandles = await this.db.marketCandle.findMany({
+              const oldCandles = await this.prisma.marketCandle.findMany({
                 where: { symbol, timeframe },
                 orderBy: { timestamp: 'desc' },
                 skip: CANDLE_RETENTION,
                 select: { id: true },
               })
               if (oldCandles.length > 0) {
-                await this.db.marketCandle.deleteMany({
+                await this.prisma.marketCandle.deleteMany({
                   where: { id: { in: oldCandles.map((c) => c.id) } },
                 })
               }
@@ -424,7 +415,7 @@ export class AgentOrchestrator {
         }
       }
 
-      await this.db.tradingAgent.update({
+      await this.prisma.tradingAgent.update({
         where: { id: agent.id },
         data: {
           status: 'IDLE',
@@ -433,7 +424,7 @@ export class AgentOrchestrator {
         },
       })
     } catch (e) {
-      await this.db.tradingAgent.update({
+      await this.prisma.tradingAgent.update({
         where: { id: agent.id },
         data: {
           status: 'ERROR',
@@ -448,12 +439,12 @@ export class AgentOrchestrator {
   // ─── Signal Agent ─────────────────────────────────────────────────────────
 
   async runSignalAgent(): Promise<void> {
-    const agents = await this.db.tradingAgent.findMany({
+    const agents = await this.prisma.tradingAgent.findMany({
       where: { type: 'SIGNAL', isActive: true },
     })
 
     for (const agent of agents) {
-      await this.db.tradingAgent.update({
+      await this.prisma.tradingAgent.update({
         where: { id: agent.id },
         data: { status: 'RUNNING' },
       })
@@ -463,7 +454,7 @@ export class AgentOrchestrator {
 
         for (const symbol of agent.symbols) {
           for (const timeframe of ['3m', '5m']) {
-            const dbCandles = await this.db.marketCandle.findMany({
+            const dbCandles = await this.prisma.marketCandle.findMany({
               where: { symbol, timeframe },
               orderBy: { timestamp: 'asc' },
               take: CANDLE_RETENTION,
@@ -508,7 +499,7 @@ export class AgentOrchestrator {
             const signals = generateAllSignals(candles, agentConfig)
 
             for (const signal of signals) {
-              await this.db.tradingSignal.create({
+              await this.prisma.tradingSignal.create({
                 data: {
                   agentId: agent.id,
                   symbol,
@@ -516,7 +507,7 @@ export class AgentOrchestrator {
                   direction: signal.direction as 'BUY' | 'SELL',
                   strength: signal.strength,
                   price: signal.price,
-                  indicators: signal.indicators as Record<string, unknown>,
+                  indicators: signal.indicators as unknown as Prisma.InputJsonValue,
                   timeframe,
                   actedOn: false,
                 },
@@ -525,12 +516,12 @@ export class AgentOrchestrator {
           }
         }
 
-        await this.db.tradingAgent.update({
+        await this.prisma.tradingAgent.update({
           where: { id: agent.id },
           data: { status: 'IDLE', lastRunAt: new Date(), lastError: null },
         })
       } catch (e) {
-        await this.db.tradingAgent.update({
+        await this.prisma.tradingAgent.update({
           where: { id: agent.id },
           data: {
             status: 'ERROR',
@@ -545,12 +536,12 @@ export class AgentOrchestrator {
   // ─── Arbitrage Agent ──────────────────────────────────────────────────────
 
   async runArbitrageAgent(): Promise<void> {
-    const agent = await this.db.tradingAgent.findFirst({
+    const agent = await this.prisma.tradingAgent.findFirst({
       where: { type: 'ARBITRAGE', isActive: true },
     })
     if (!agent) return
 
-    await this.db.tradingAgent.update({
+    await this.prisma.tradingAgent.update({
       where: { id: agent.id },
       data: { status: 'RUNNING' },
     })
@@ -621,7 +612,7 @@ export class AgentOrchestrator {
 
       for (const opp of opportunities) {
         const expiresAt = new Date(Date.now() + 5 * 60 * 1000)
-        await this.db.arbitrageOpportunity.create({
+        await this.prisma.arbitrageOpportunity.create({
           data: {
             type: opp.type,
             symbols: opp.symbols,
@@ -644,12 +635,12 @@ export class AgentOrchestrator {
         })
       }
 
-      await this.db.tradingAgent.update({
+      await this.prisma.tradingAgent.update({
         where: { id: agent.id },
         data: { status: 'IDLE', lastRunAt: new Date(), lastError: null },
       })
     } catch (e) {
-      await this.db.tradingAgent.update({
+      await this.prisma.tradingAgent.update({
         where: { id: agent.id },
         data: {
           status: 'ERROR',
@@ -663,12 +654,12 @@ export class AgentOrchestrator {
   // ─── Execution Agent ──────────────────────────────────────────────────────
 
   async runExecutionAgent(): Promise<void> {
-    const agent = await this.db.tradingAgent.findFirst({
+    const agent = await this.prisma.tradingAgent.findFirst({
       where: { type: 'EXECUTION', isActive: true },
     })
     if (!agent) return
 
-    await this.db.tradingAgent.update({
+    await this.prisma.tradingAgent.update({
       where: { id: agent.id },
       data: { status: 'RUNNING' },
     })
@@ -685,7 +676,7 @@ export class AgentOrchestrator {
       )
 
       const cutoff = new Date(Date.now() - 5 * 60 * 1000)
-      const signals = await this.db.tradingSignal.findMany({
+      const signals = await this.prisma.tradingSignal.findMany({
         where: {
           actedOn: false,
           strength: { gte: threshold },
@@ -699,13 +690,13 @@ export class AgentOrchestrator {
       const balance = await this.primary.getBalance()
       const equity = balance.totalUsdt
 
-      const openTrades = await this.db.agentTrade.findMany({
+      const openTrades = await this.prisma.agentTrade.findMany({
         where: { status: 'OPEN', mode: agent.mode },
       })
 
       const todayStart = new Date()
       todayStart.setHours(0, 0, 0, 0)
-      const todayTrades = await this.db.agentTrade.findMany({
+      const todayTrades = await this.prisma.agentTrade.findMany({
         where: {
           status: 'CLOSED',
           exitAt: { gte: todayStart },
@@ -721,11 +712,11 @@ export class AgentOrchestrator {
         // Kimchi filter: skip trades that contradict strong Kimchi signal
         if (this.kimchiReading && !kimchiAgreesWithTrade(this.kimchiReading, signal.direction as 'BUY' | 'SELL')) {
           console.log(`[Execution] Kimchi veto: skipping ${signal.direction} on ${signal.symbol} (${this.kimchiReading.signal})`)
-          await this.db.tradingSignal.update({ where: { id: signal.id }, data: { actedOn: true } })
+          await this.prisma.tradingSignal.update({ where: { id: signal.id }, data: { actedOn: true } })
           continue
         }
 
-        const dbCandles = await this.db.marketCandle.findMany({
+        const dbCandles = await this.prisma.marketCandle.findMany({
           where: { symbol: signal.symbol, timeframe: signal.timeframe },
           orderBy: { timestamp: 'asc' },
           take: 50,
@@ -771,34 +762,34 @@ export class AgentOrchestrator {
           newTradesCount++
         }
 
-        await this.db.tradingSignal.update({
+        await this.prisma.tradingSignal.update({
           where: { id: signal.id },
           data: { actedOn: true },
         })
       }
 
       if (newTradesCount > 0) {
-        const allTrades = await this.db.agentTrade.findMany({
+        const allTrades = await this.prisma.agentTrade.findMany({
           where: { agentId: agent.id, status: 'CLOSED' },
           select: { pnl: true },
         })
         const totalPnl = allTrades.reduce((s, t) => s + (t.pnl ?? 0), 0)
         const winners = allTrades.filter((t) => (t.pnl ?? 0) > 0).length
         const winRate = allTrades.length > 0 ? winners / allTrades.length : 0
-        const totalTrades = await this.db.agentTrade.count({ where: { agentId: agent.id } })
+        const totalTrades = await this.prisma.agentTrade.count({ where: { agentId: agent.id } })
 
-        await this.db.tradingAgent.update({
+        await this.prisma.tradingAgent.update({
           where: { id: agent.id },
           data: { totalPnl, todayPnl: dayPnl, winRate, totalTrades },
         })
       }
 
-      await this.db.tradingAgent.update({
+      await this.prisma.tradingAgent.update({
         where: { id: agent.id },
         data: { status: 'IDLE', lastRunAt: new Date(), lastError: null },
       })
     } catch (e) {
-      await this.db.tradingAgent.update({
+      await this.prisma.tradingAgent.update({
         where: { id: agent.id },
         data: {
           status: 'ERROR',
@@ -814,29 +805,29 @@ export class AgentOrchestrator {
   async syncTrades(): Promise<void> {
     await syncAllOpenTrades({ exchange: this.primary, prisma: this.prisma })
 
-    const agents = await this.db.tradingAgent.findMany({
+    const agents = await this.prisma.tradingAgent.findMany({
       where: { type: 'EXECUTION' },
     })
 
     for (const agent of agents) {
-      const closed = await this.db.agentTrade.findMany({
+      const closed = await this.prisma.agentTrade.findMany({
         where: { agentId: agent.id, status: 'CLOSED' },
         select: { pnl: true },
       })
       const totalPnl = closed.reduce((s, t) => s + (t.pnl ?? 0), 0)
       const winners = closed.filter((t) => (t.pnl ?? 0) > 0).length
       const winRate = closed.length > 0 ? winners / closed.length : 0
-      const totalTrades = await this.db.agentTrade.count({ where: { agentId: agent.id } })
+      const totalTrades = await this.prisma.agentTrade.count({ where: { agentId: agent.id } })
 
       const todayStart = new Date()
       todayStart.setHours(0, 0, 0, 0)
-      const todayTrades = await this.db.agentTrade.findMany({
+      const todayTrades = await this.prisma.agentTrade.findMany({
         where: { agentId: agent.id, status: 'CLOSED', exitAt: { gte: todayStart } },
         select: { pnl: true },
       })
       const todayPnl = todayTrades.reduce((s, t) => s + (t.pnl ?? 0), 0)
 
-      await this.db.tradingAgent.update({
+      await this.prisma.tradingAgent.update({
         where: { id: agent.id },
         data: { totalPnl, todayPnl, winRate, totalTrades },
       })
@@ -853,19 +844,19 @@ export class AgentOrchestrator {
 
     const todayStart = new Date()
     todayStart.setHours(0, 0, 0, 0)
-    const todayTrades = await this.db.agentTrade.findMany({
+    const todayTrades = await this.prisma.agentTrade.findMany({
       where: { status: 'CLOSED', exitAt: { gte: todayStart }, mode: 'PAPER' },
       select: { pnl: true },
     })
     const dayPnl = todayTrades.reduce((s, t) => s + (t.pnl ?? 0), 0)
 
-    const allClosed = await this.db.agentTrade.findMany({
+    const allClosed = await this.prisma.agentTrade.findMany({
       where: { status: 'CLOSED', mode: 'PAPER' },
       select: { pnl: true },
     })
     const totalPnl = allClosed.reduce((s, t) => s + (t.pnl ?? 0), 0)
 
-    await this.db.pnLSnapshot.create({
+    await this.prisma.pnLSnapshot.create({
       data: {
         mode: 'PAPER',
         totalPnl,
@@ -880,25 +871,25 @@ export class AgentOrchestrator {
   // ─── Learning Agent ───────────────────────────────────────────────────────
 
   async runLearningAgent(): Promise<void> {
-    const agent = await this.db.tradingAgent.findFirst({
+    const agent = await this.prisma.tradingAgent.findFirst({
       where: { type: 'LEARNING', isActive: true },
     })
     if (!agent) return
 
-    await this.db.tradingAgent.update({
+    await this.prisma.tradingAgent.update({
       where: { id: agent.id },
       data: { status: 'RUNNING' },
     })
 
     try {
-      const recentTrades = await this.db.agentTrade.findMany({
+      const recentTrades = await this.prisma.agentTrade.findMany({
         where: { status: 'CLOSED' },
         orderBy: { exitAt: 'desc' },
         take: 50,
       })
 
       if (recentTrades.length < 10) {
-        await this.db.tradingAgent.update({
+        await this.prisma.tradingAgent.update({
           where: { id: agent.id },
           data: { status: 'IDLE', lastRunAt: new Date() },
         })
@@ -937,7 +928,7 @@ export class AgentOrchestrator {
 
       const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
       // Use BTC/USDT as the proxy asset for optimization (instead of SPY)
-      const btcCandles = await this.db.marketCandle.findMany({
+      const btcCandles = await this.prisma.marketCandle.findMany({
         where: {
           symbol: 'BTC/USDT',
           timeframe: '5m',
@@ -999,7 +990,7 @@ export class AgentOrchestrator {
         }
       }
 
-      const signalAgents = await this.db.tradingAgent.findMany({
+      const signalAgents = await this.prisma.tradingAgent.findMany({
         where: { type: 'SIGNAL' },
       })
       for (const sa of signalAgents) {
@@ -1009,15 +1000,15 @@ export class AgentOrchestrator {
           ...bestConfig,
           lastOptimizedAt: new Date().toISOString(),
         }
-        await this.db.tradingAgent.update({
+        await this.prisma.tradingAgent.update({
           where: { id: sa.id },
-          data: { config: updatedConfig },
+          data: { config: updatedConfig as unknown as Prisma.InputJsonValue },
         })
       }
 
       const signalAgent = signalAgents[0]
       if (signalAgent) {
-        await this.db.backtest.create({
+        await this.prisma.backtest.create({
           data: {
             agentId: signalAgent.id,
             strategy: 'optimized',
@@ -1040,12 +1031,12 @@ export class AgentOrchestrator {
         })
       }
 
-      await this.db.tradingAgent.update({
+      await this.prisma.tradingAgent.update({
         where: { id: agent.id },
         data: { status: 'IDLE', lastRunAt: new Date(), lastError: null },
       })
     } catch (e) {
-      await this.db.tradingAgent.update({
+      await this.prisma.tradingAgent.update({
         where: { id: agent.id },
         data: {
           status: 'ERROR',
@@ -1059,12 +1050,12 @@ export class AgentOrchestrator {
   // ─── Self Test Agent ──────────────────────────────────────────────────────
 
   async runSelfTestAgent(): Promise<void> {
-    const agent = await this.db.tradingAgent.findFirst({
+    const agent = await this.prisma.tradingAgent.findFirst({
       where: { type: 'SELF_TEST' },
     })
     if (!agent) return
 
-    await this.db.tradingAgent.update({
+    await this.prisma.tradingAgent.update({
       where: { id: agent.id },
       data: { status: 'RUNNING' },
     })
@@ -1073,7 +1064,7 @@ export class AgentOrchestrator {
 
     // Test 1: Data freshness — check BTC/USDT candles
     try {
-      const latestCandle = await this.db.marketCandle.findFirst({
+      const latestCandle = await this.prisma.marketCandle.findFirst({
         where: { symbol: 'BTC/USDT' },
         orderBy: { timestamp: 'desc' },
       })
@@ -1157,7 +1148,7 @@ export class AgentOrchestrator {
 
     console.log('[SelfTest] Results:', testResults)
 
-    await this.db.tradingAgent.update({
+    await this.prisma.tradingAgent.update({
       where: { id: agent.id },
       data: {
         status: allPassed ? 'IDLE' : 'ERROR',

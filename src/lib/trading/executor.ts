@@ -3,7 +3,6 @@
  * and keeps DB trade records in sync with actual order state.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import type { PrismaClient } from '@prisma/client'
 import type { ExchangeClient } from './exchange'
 import type { SignalResult, Candle } from './signals'
@@ -133,7 +132,7 @@ export async function executeSignal(params: ExecuteSignalParams): Promise<Execut
     })
 
     // Persist trade record
-    await (prisma as any).agentTrade.create({
+    await prisma.agentTrade.create({
       data: {
         agentId,
         symbol: order.symbol,
@@ -206,7 +205,7 @@ export async function syncOrderStatus(params: {
       const pnlPct =
         trade.entryPrice === 0 ? 0 : (pnl / (trade.entryPrice * filledQty)) * 100
 
-      await (prisma as any).agentTrade.update({
+      await prisma.agentTrade.update({
         where: { id: trade.id },
         data: {
           exitPrice: filledPrice,
@@ -222,7 +221,7 @@ export async function syncOrderStatus(params: {
       order.status === 'expired' ||
       order.status === 'rejected'
     ) {
-      await (prisma as any).agentTrade.update({
+      await prisma.agentTrade.update({
         where: { id: trade.id },
         data: { status: 'CANCELLED' },
       })
@@ -245,7 +244,7 @@ export async function syncAllOpenTrades(params: {
     ? { status: 'OPEN' as const, agentId, alpacaOrderId: { not: null as unknown as string } }
     : { status: 'OPEN' as const, alpacaOrderId: { not: null as unknown as string } }
 
-  const openTrades = await (prisma as any).agentTrade.findMany({ where })
+  const openTrades = await prisma.agentTrade.findMany({ where })
 
   await Promise.allSettled(
     openTrades.map((trade: any) =>
