@@ -8,9 +8,7 @@
  * Handles order submission via ExchangeClient (paper or live).
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient, type OpeningBoxTrade } from '@prisma/client'
 import { PrismaPg } from '@prisma/adapter-pg'
 import type { ExchangeClient } from '@/lib/trading/exchange'
 import {
@@ -31,18 +29,18 @@ function createPrismaClient(): PrismaClient {
 
 // ─── DB ↔ OBState bridge ──────────────────────────────────────────────────────
 
-function dbRowToState(row: any, symbol: string): OBState {
+function dbRowToState(row: OpeningBoxTrade, symbol: string): OBState {
   return {
     status: row.status as OBState['status'],
     date: row.date,
     symbol,
     box: row.boxTop != null ? {
       top: row.boxTop,
-      bottom: row.boxBottom,
-      range: row.boxRange,
-      openCandleTime: row.openCandleTime,
-      openCandleOpen: row.openCandleOpen,
-      openCandleClose: row.openCandleClose,
+      bottom: row.boxBottom!,
+      range: row.boxRange!,
+      openCandleTime: row.openCandleTime!,
+      openCandleOpen: row.openCandleOpen!,
+      openCandleClose: row.openCandleClose!,
     } : null,
     direction: (row.breakoutDirection as OBState['direction']) ?? null,
     breakoutTime: row.breakoutTime ?? null,
@@ -65,11 +63,9 @@ function dbRowToState(row: any, symbol: string): OBState {
 
 export class OpeningBoxAgent {
   private prisma: PrismaClient
-  private db: any
 
   constructor() {
     this.prisma = createPrismaClient()
-    this.db = this.prisma
   }
 
   /**
@@ -180,7 +176,7 @@ export class OpeningBoxAgent {
       })
 
       // Save order ID
-      await this.db.openingBoxTrade.update({
+      await this.prisma.openingBoxTrade.update({
         where: { date_symbol_mode: { date: state.date, symbol: state.symbol, mode } },
         data: { orderId: result.orderId },
       })
@@ -232,7 +228,7 @@ export class OpeningBoxAgent {
     mode: 'PAPER' | 'LIVE'
   ): Promise<OBState> {
     try {
-      const row = await this.db.openingBoxTrade.findUnique({
+      const row = await this.prisma.openingBoxTrade.findUnique({
         where: { date_symbol_mode: { date, symbol, mode } },
       })
       if (row) return dbRowToState(row, symbol)
@@ -267,7 +263,7 @@ export class OpeningBoxAgent {
     }
 
     try {
-      await this.db.openingBoxTrade.upsert({
+      await this.prisma.openingBoxTrade.upsert({
         where: { date_symbol_mode: { date: state.date, symbol: state.symbol, mode } },
         create: { date: state.date, symbol: state.symbol, mode, ...data },
         update: data,
@@ -282,10 +278,10 @@ export class OpeningBoxAgent {
   async getTodayStatus(
     symbols: string[] = DEFAULT_OB_SYMBOLS,
     mode: 'PAPER' | 'LIVE' = 'PAPER'
-  ): Promise<any[]> {
+  ): Promise<OpeningBoxTrade[]> {
     const today = getTradingDateStr(new Date(), symbols[0] ?? '')
     try {
-      return await this.db.openingBoxTrade.findMany({
+      return await this.prisma.openingBoxTrade.findMany({
         where: { date: today, symbol: { in: symbols }, mode },
         orderBy: { createdAt: 'asc' },
       })
@@ -296,9 +292,9 @@ export class OpeningBoxAgent {
     symbol: string,
     limit = 30,
     mode: 'PAPER' | 'LIVE' = 'PAPER'
-  ): Promise<any[]> {
+  ): Promise<OpeningBoxTrade[]> {
     try {
-      return await this.db.openingBoxTrade.findMany({
+      return await this.prisma.openingBoxTrade.findMany({
         where: { symbol, mode, status: 'DONE' },
         orderBy: { date: 'desc' },
         take: limit,

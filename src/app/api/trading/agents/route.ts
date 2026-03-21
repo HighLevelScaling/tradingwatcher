@@ -5,7 +5,7 @@ export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
-    const agents = await (prisma as any).tradingAgent.findMany({
+    const agents = await prisma.tradingAgent.findMany({
       orderBy: { createdAt: 'asc' },
       include: {
         _count: {

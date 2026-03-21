@@ -141,7 +141,7 @@ export default function KimchiMonitor() {
                   <YAxis tick={{ fontSize: 9, fill: "#475569" }} tickLine={false} axisLine={false} tickFormatter={(v) => `${v.toFixed(1)}%`} />
                   <Tooltip
                     contentStyle={{ background: "#12121a", border: "1px solid #2e2e45", borderRadius: 8, fontSize: 11 }}
-                    formatter={(v: number) => [`${v.toFixed(2)}%`, "Premium"]}
+                    formatter={((v: number) => [`${v.toFixed(2)}%`, "Premium"]) as never}
                   />
                   <ReferenceLine y={0} stroke="#334155" strokeDasharray="3 3" />
                   <ReferenceLine y={1.5} stroke="#22c55e" strokeDasharray="2 2" strokeOpacity={0.4} label={{ value: "Bull", fill: "#22c55e", fontSize: 9 }} />

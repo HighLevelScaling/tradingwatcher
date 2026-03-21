@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 
 // PATCH /api/trading/exchanges/:id — update name, sandbox, isPrimary, isActive, label
 export async function PATCH(

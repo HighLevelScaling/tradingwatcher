@@ -23,13 +23,13 @@ export async function POST(request: NextRequest) {
       const isActive = body.action === 'start'
 
       if (body.agentId) {
-        await (prisma as any).tradingAgent.update({
+        await prisma.tradingAgent.update({
           where: { id: body.agentId },
           data: { isActive },
         })
       } else {
         // Toggle all agents
-        await (prisma as any).tradingAgent.updateMany({ data: { isActive } })
+        await prisma.tradingAgent.updateMany({ data: { isActive } })
       }
 
       return NextResponse.json({

@@ -21,7 +21,7 @@ export async function PATCH(
     if (body.mode === 'PAPER' || body.mode === 'LIVE') updateData.mode = body.mode
     if (body.status) updateData.status = body.status
 
-    const agent = await (prisma as any).tradingAgent.update({
+    const agent = await prisma.tradingAgent.update({
       where: { id },
       data: updateData,
     })

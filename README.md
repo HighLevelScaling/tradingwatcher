@@ -1,36 +1,127 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TradingWatcher
+
+Full-stack trading intelligence platform: track congressional trades, institutional 13F filings, and run autonomous crypto trading strategies.
+
+## Tech Stack
+
+- **Frontend:** Next.js 16, React 19, Tailwind CSS 4, Radix UI, Recharts
+- **Backend:** Next.js API routes, SSE streaming, CCXT exchange integration
+- **Database:** PostgreSQL via Prisma ORM (Supabase)
+- **Auth:** NextAuth v5
+- **Payments:** Stripe (FREE / PRO / ENTERPRISE tiers)
+- **Deployment:** Vercel
+
+## Features
+
+### Congressional & Institutional Tracking
+- Congress trade monitoring with QuiverQuant data sync
+- 13F institutional filing tracker (SEC/EDGAR)
+- Notable trader position tracking
+- Per-ticker, per-politician, per-institution watchlists
+- Custom alerts with webhook delivery
+
+### Autonomous Crypto Trading
+- **7 AI agents:** Market Data, Momentum, Mean Reversion, Arbitrage, Execution, Learning, Self-Test
+- **Opening Box strategy:** Intraday state-machine strategy for QQQ/USD
+- **Multi-exchange support:** Unlimited CCXT exchanges via env vars or DB management UI
+- **Kimchi premium monitor:** KRW premium signal integration
+- **Session-aware thresholds:** Adjusts signal sensitivity by market session
+- **Latency monitoring:** Per-exchange latency tracking with arbitrage safety checks
+- **P&L dashboard:** Real-time SSE-powered trading dashboard
+- **Risk management:** Position sizing, daily loss limits, max position caps
+- **Self-optimizing:** Learning agent tunes RSI/BB parameters from trade results
 
 ## Getting Started
 
-First, run the development server:
+### Prerequisites
+- Node.js 20+
+- PostgreSQL (or Supabase)
+- Exchange API keys (Binance, Bybit, etc.)
+
+### Setup
 
 ```bash
+# Install dependencies
+npm install
+
+# Run Prisma migrations
+npx prisma migrate deploy
+
+# Generate Prisma client
+npx prisma generate
+
+# Start development server
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Environment Variables
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+# Database
+DATABASE_URL=postgresql://...
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# Auth
+NEXTAUTH_SECRET=
+NEXTAUTH_URL=http://localhost:3000
 
-## Learn More
+# Exchange (numbered — add as many as needed)
+EXCHANGE_1_ID=binance
+EXCHANGE_1_API_KEY=
+EXCHANGE_1_SECRET=
+EXCHANGE_1_SANDBOX=true
+EXCHANGE_1_PRIMARY=true
 
-To learn more about Next.js, take a look at the following resources:
+# Data sources
+QUIVERQUANT_API_KEY=
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+# Stripe
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+# Cron protection
+CRON_SECRET=
+```
 
-## Deploy on Vercel
+### Cron Jobs (Vercel)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Route | Schedule | Description |
+|-------|----------|-------------|
+| `/api/cron/trading` | Every minute (market hours) | Run trading agent cycle |
+| `/api/cron/sync` | 2 PM UTC weekdays | Sync congress trades |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Running the Trading Agents
+
+```bash
+# One-off cycle via CLI
+npm run agents
+
+# Or trigger via API
+curl -X POST http://localhost:3000/api/trading/control \
+  -H "Content-Type: application/json" \
+  -d '{"action": "cycle"}'
+```
+
+## Project Structure
+
+```
+src/
+├── agents/             # Trading agent orchestrator & strategies
+├── app/
+│   ├── (auth)/         # Login/register pages
+│   ├── (dashboard)/    # Dashboard pages (trading, politicians, etc.)
+│   └── api/
+│       ├── trading/    # Trading system APIs
+│       └── cron/       # Scheduled tasks
+├── components/
+│   ├── trading/        # Trading-specific components
+│   ├── shared/         # Error boundaries, loading spinners
+│   └── ui/             # Shadcn-style primitives
+├── lib/
+│   ├── trading/        # Core trading logic (exchange, executor, risk, signals)
+│   ├── sync/           # Data sync (congress, institutions)
+│   ├── notifications.ts
+│   ├── logger.ts
+│   └── prisma.ts
+└── types/              # TypeScript declarations
+```

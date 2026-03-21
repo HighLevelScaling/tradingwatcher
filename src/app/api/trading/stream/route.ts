@@ -5,25 +5,25 @@ export const dynamic = 'force-dynamic'
 
 async function fetchStreamData() {
   const [agents, latestTrade, latestSignal, pnlSummary, arbitrage] = await Promise.allSettled([
-    (prisma as any).tradingAgent.findMany({
+    prisma.tradingAgent.findMany({
       orderBy: { createdAt: 'asc' },
       include: {
         _count: { select: { trades: true, signals: true } },
         trades: { where: { status: 'OPEN' }, select: { id: true } },
       },
     }),
-    (prisma as any).agentTrade.findFirst({
+    prisma.agentTrade.findFirst({
       orderBy: { createdAt: 'desc' },
       include: { agent: { select: { name: true } } },
     }),
-    (prisma as any).tradingSignal.findFirst({
+    prisma.tradingSignal.findFirst({
       orderBy: { createdAt: 'desc' },
       include: { agent: { select: { name: true } } },
     }),
-    (prisma as any).pnLSnapshot.findFirst({
+    prisma.pnLSnapshot.findFirst({
       orderBy: { timestamp: 'desc' },
     }),
-    (prisma as any).arbitrageOpportunity.findMany({
+    prisma.arbitrageOpportunity.findMany({
       orderBy: { detectedAt: 'desc' },
       take: 5,
     }),
