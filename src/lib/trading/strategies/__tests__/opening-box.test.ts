@@ -2,263 +2,225 @@ import { describe, it, expect } from 'vitest'
 import {
   processCandle,
   initialState,
-  getUtcDateStr,
-  getTradingDateStr,
   isOpeningCandle,
+  getTradingDateStr,
   calcStats,
   type OBCandle,
   type OBState,
 } from '../opening-box'
 
-function makeCandle(overrides: Partial<OBCandle> & { hour?: number; min?: number }): OBCandle {
-  const { hour = 0, min = 0, ...rest } = overrides
-  const d = new Date(`2025-01-15T${String(hour).padStart(2, '0')}:${String(min).padStart(2, '0')}:00.000Z`)
+// Helper to create a candle at a specific UTC hour
+function makeCandle(
+  hour: number,
+  open: number,
+  high: number,
+  low: number,
+  close: number,
+  minute = 0,
+  dateStr = '2026-03-10'
+): OBCandle {
   return {
-    timestamp: d,
-    open: 100,
-    high: 101,
-    low: 99,
-    close: 100,
+    timestamp: new Date(`${dateStr}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00Z`),
+    open,
+    high,
+    low,
+    close,
     volume: 1000,
-    ...rest,
   }
 }
 
-describe('Opening Box Strategy', () => {
-  describe('getUtcDateStr', () => {
-    it('returns YYYY-MM-DD format', () => {
-      const d = new Date('2025-03-15T14:30:00Z')
-      expect(getUtcDateStr(d)).toBe('2025-03-15')
-    })
+describe('isOpeningCandle', () => {
+  it('crypto: 00:00 UTC is the opening candle', () => {
+    const candle = makeCandle(0, 100, 105, 95, 100)
+    expect(isOpeningCandle(candle, 'BTC/USDT')).toBe(true)
   })
 
-  describe('getTradingDateStr', () => {
-    it('uses UTC for crypto symbols', () => {
-      const d = new Date('2025-03-15T23:00:00Z')
-      expect(getTradingDateStr(d, 'BTC/USDT')).toBe('2025-03-15')
-    })
-
-    it('uses ET offset for stock symbols', () => {
-      const d = new Date('2025-03-15T03:00:00Z') // 11 PM ET previous day
-      expect(getTradingDateStr(d, 'QQQ/USD')).toBe('2025-03-14')
-    })
+  it('crypto: any other time is not the opening candle', () => {
+    const candle = makeCandle(5, 100, 105, 95, 100)
+    expect(isOpeningCandle(candle, 'ETH/USDT')).toBe(false)
   })
 
-  describe('isOpeningCandle', () => {
-    it('returns true for midnight UTC crypto candle', () => {
-      const candle = makeCandle({ hour: 0, min: 0 })
-      expect(isOpeningCandle(candle, 'BTC/USDT')).toBe(true)
-    })
-
-    it('returns false for non-midnight crypto candle', () => {
-      const candle = makeCandle({ hour: 1, min: 0 })
-      expect(isOpeningCandle(candle, 'BTC/USDT')).toBe(false)
-    })
-
-    it('returns true for US market open (EST)', () => {
-      // January = EST = UTC-5, so 9:30 ET = 14:30 UTC
-      const candle = makeCandle({ hour: 14, min: 30 })
-      expect(isOpeningCandle(candle, 'QQQ/USD')).toBe(true)
-    })
+  it('stocks: 13:30 UTC (EDT) is the opening candle during summer', () => {
+    // June 15 is during EDT
+    const candle = makeCandle(13, 100, 105, 95, 100, 30, '2026-06-15')
+    expect(isOpeningCandle(candle, 'QQQ')).toBe(true)
   })
 
-  describe('processCandle', () => {
-    it('transitions from WAITING_OPEN_CANDLE to WAITING_BREAKOUT on opening candle', () => {
-      const state = { ...initialState('BTC/USDT'), date: '2025-01-15' }
-      const candle = makeCandle({ hour: 0, min: 0, high: 105, low: 95, close: 100 })
+  it('stocks: 14:30 UTC (EST) is the opening candle during winter', () => {
+    // January 15 is during EST
+    const candle = makeCandle(14, 100, 105, 95, 100, 30, '2026-01-15')
+    expect(isOpeningCandle(candle, 'QQQ')).toBe(true)
+  })
+})
 
-      const { state: newState, action } = processCandle(state, candle)
-
-      expect(newState.status).toBe('WAITING_BREAKOUT')
-      expect(newState.box).not.toBeNull()
-      expect(newState.box!.top).toBe(105)
-      expect(newState.box!.bottom).toBe(95)
-      expect(newState.box!.range).toBe(10)
-      expect(action.type).toBe('NONE')
-    })
-
-    it('skips non-opening candles when WAITING_OPEN_CANDLE', () => {
-      const state = { ...initialState('BTC/USDT'), date: '2025-01-15' }
-      const candle = makeCandle({ hour: 1, min: 0 })
-
-      const { state: newState, action } = processCandle(state, candle)
-      expect(newState.status).toBe('WAITING_OPEN_CANDLE')
-      expect(action.type).toBe('NONE')
-    })
-
-    it('detects LONG breakout when close > box top', () => {
-      const state: OBState = {
-        ...initialState('BTC/USDT'),
-        date: '2025-01-15',
-        status: 'WAITING_BREAKOUT',
-        box: {
-          top: 105,
-          bottom: 95,
-          range: 10,
-          openCandleTime: new Date('2025-01-15T00:00:00Z'),
-          openCandleOpen: 100,
-          openCandleClose: 100,
-        },
-      }
-
-      const candle = makeCandle({ hour: 0, min: 5, close: 107, high: 108, low: 103 })
-      const { state: newState } = processCandle(state, candle)
-
-      expect(newState.status).toBe('WAITING_RETRACEMENT')
-      expect(newState.direction).toBe('LONG')
-      expect(newState.entryPrice).toBe(105)  // box top
-      expect(newState.stopLoss).toBeCloseTo(105 - 10 * 0.45)
-      expect(newState.takeProfit).toBe(105 + 10 * 2)
-    })
-
-    it('detects SHORT breakout when close < box bottom', () => {
-      const state: OBState = {
-        ...initialState('BTC/USDT'),
-        date: '2025-01-15',
-        status: 'WAITING_BREAKOUT',
-        box: {
-          top: 105,
-          bottom: 95,
-          range: 10,
-          openCandleTime: new Date('2025-01-15T00:00:00Z'),
-          openCandleOpen: 100,
-          openCandleClose: 100,
-        },
-      }
-
-      const candle = makeCandle({ hour: 0, min: 5, close: 93, high: 97, low: 92 })
-      const { state: newState } = processCandle(state, candle)
-
-      expect(newState.status).toBe('WAITING_RETRACEMENT')
-      expect(newState.direction).toBe('SHORT')
-      expect(newState.entryPrice).toBe(95)  // box bottom
-    })
-
-    it('enters trade on retracement touch', () => {
-      const state: OBState = {
-        ...initialState('BTC/USDT'),
-        date: '2025-01-15',
-        status: 'WAITING_RETRACEMENT',
-        direction: 'LONG',
-        box: { top: 105, bottom: 95, range: 10, openCandleTime: new Date(), openCandleOpen: 100, openCandleClose: 100 },
-        breakoutTime: new Date(),
-        breakoutCandleClose: 107,
-        entryPrice: 105,
-        stopLoss: 100.5,
-        takeProfit: 125,
-        retracementCandles: 0,
-      }
-
-      // Candle whose low touches the box top (105)
-      const candle = makeCandle({ hour: 0, min: 10, low: 104, high: 108, close: 107 })
-      const { state: newState, action } = processCandle(state, candle)
-
-      expect(newState.status).toBe('IN_TRADE')
-      expect(action.type).toBe('ENTER_LONG')
-      expect(action.price).toBe(105)
-    })
-
-    it('invalidates after MAX_RETRACEMENT_CANDLES', () => {
-      const state: OBState = {
-        ...initialState('BTC/USDT'),
-        date: '2025-01-15',
-        status: 'WAITING_RETRACEMENT',
-        direction: 'LONG',
-        box: { top: 105, bottom: 95, range: 10, openCandleTime: new Date(), openCandleOpen: 100, openCandleClose: 100 },
-        breakoutTime: new Date(),
-        breakoutCandleClose: 107,
-        entryPrice: 105,
-        stopLoss: 100.5,
-        takeProfit: 125,
-        retracementCandles: 2, // already 2, next will be 3 = max
-      }
-
-      // Candle that doesn't touch box top
-      const candle = makeCandle({ hour: 0, min: 15, low: 106, high: 110, close: 109 })
-      const { state: newState, action } = processCandle(state, candle)
-
-      expect(newState.status).toBe('DONE')
-      expect(action.type).toBe('INVALIDATE')
-    })
-
-    it('exits on take profit', () => {
-      const state: OBState = {
-        ...initialState('BTC/USDT'),
-        date: '2025-01-15',
-        status: 'IN_TRADE',
-        direction: 'LONG',
-        box: { top: 105, bottom: 95, range: 10, openCandleTime: new Date(), openCandleOpen: 100, openCandleClose: 100 },
-        breakoutTime: new Date(),
-        breakoutCandleClose: 107,
-        entryPrice: 105,
-        stopLoss: 100.5,
-        takeProfit: 125,
-        entryFillPrice: 105,
-        entryAt: new Date(),
-        retracementCandles: 0,
-      }
-
-      const candle = makeCandle({ hour: 0, min: 20, high: 126, low: 118, close: 125 })
-      const { state: newState, action } = processCandle(state, candle)
-
-      expect(newState.status).toBe('DONE')
-      expect(newState.exitReason).toBe('TP')
-      expect(newState.pnl).toBe(20) // 125 - 105
-      expect(action.type).toBe('EXIT')
-    })
-
-    it('exits on stop loss', () => {
-      const state: OBState = {
-        ...initialState('BTC/USDT'),
-        date: '2025-01-15',
-        status: 'IN_TRADE',
-        direction: 'LONG',
-        box: { top: 105, bottom: 95, range: 10, openCandleTime: new Date(), openCandleOpen: 100, openCandleClose: 100 },
-        breakoutTime: new Date(),
-        breakoutCandleClose: 107,
-        entryPrice: 105,
-        stopLoss: 100.5,
-        takeProfit: 125,
-        entryFillPrice: 105,
-        entryAt: new Date(),
-        retracementCandles: 0,
-      }
-
-      const candle = makeCandle({ hour: 0, min: 20, high: 104, low: 99, close: 100 })
-      const { state: newState, action } = processCandle(state, candle)
-
-      expect(newState.status).toBe('DONE')
-      expect(newState.exitReason).toBe('SL')
-      expect(newState.pnl).toBe(100.5 - 105)  // -4.5
-      expect(action.type).toBe('EXIT')
-    })
+describe('getTradingDateStr', () => {
+  it('returns UTC date for crypto symbols', () => {
+    const date = new Date('2026-03-10T23:00:00Z')
+    expect(getTradingDateStr(date, 'BTC/USDT')).toBe('2026-03-10')
   })
 
-  describe('calcStats', () => {
-    it('calculates stats correctly', () => {
-      const trades = [
-        { pnlPct: 5, exitReason: 'TP' },
-        { pnlPct: -2, exitReason: 'SL' },
-        { pnlPct: 3, exitReason: 'TP' },
-        { pnlPct: null, exitReason: 'INVALIDATED' },
-      ]
+  it('returns ET date for stock symbols', () => {
+    // 2 AM UTC = 10 PM ET previous day
+    const date = new Date('2026-03-10T02:00:00Z')
+    expect(getTradingDateStr(date, 'QQQ')).toBe('2026-03-09')
+  })
+})
 
-      const stats = calcStats(trades)
+describe('processCandle — full state flow (LONG)', () => {
+  const symbol = 'BTC/USDT'
 
-      expect(stats.total).toBe(4)
-      expect(stats.wins).toBe(2)
-      expect(stats.losses).toBe(1)
-      expect(stats.invalidated).toBe(1)
-      expect(stats.winRate).toBeCloseTo(2 / 3)
-      expect(stats.avgWinPct).toBe(4)
-      expect(stats.avgLossPct).toBe(-2)
-      expect(stats.totalPnlPct).toBe(6)
-    })
+  it('WAITING_OPEN_CANDLE → WAITING_BREAKOUT on opening candle', () => {
+    const state = { ...initialState(symbol), date: '2026-03-10' }
+    const candle = makeCandle(0, 100, 110, 90, 105)
+    const { state: next, action } = processCandle(state, candle)
 
-    it('handles empty trades', () => {
-      const stats = calcStats([])
-      expect(stats.total).toBe(0)
-      expect(stats.winRate).toBe(0)
-    })
+    expect(next.status).toBe('WAITING_BREAKOUT')
+    expect(next.box).not.toBeNull()
+    expect(next.box!.top).toBe(110)
+    expect(next.box!.bottom).toBe(90)
+    expect(next.box!.range).toBe(20)
+    expect(action.type).toBe('NONE')
+  })
+
+  it('WAITING_BREAKOUT → WAITING_RETRACEMENT on close above box', () => {
+    let state = { ...initialState(symbol), date: '2026-03-10' }
+    // Opening candle
+    state = processCandle(state, makeCandle(0, 100, 110, 90, 105)).state
+    // Breakout candle: closes above 110
+    const { state: next, action } = processCandle(state, makeCandle(0, 108, 115, 107, 112, 5))
+
+    expect(next.status).toBe('WAITING_RETRACEMENT')
+    expect(next.direction).toBe('LONG')
+    expect(next.entryPrice).toBe(110) // box top
+    expect(next.stopLoss).toBe(110 - 20 * 0.45) // 101
+    expect(next.takeProfit).toBe(110 + 20 * 2) // 150
+    expect(action.type).toBe('NONE')
+  })
+
+  it('WAITING_RETRACEMENT → IN_TRADE when wick touches box edge', () => {
+    let state = { ...initialState(symbol), date: '2026-03-10' }
+    state = processCandle(state, makeCandle(0, 100, 110, 90, 105)).state
+    state = processCandle(state, makeCandle(0, 108, 115, 107, 112, 5)).state
+    // Retracement candle: low touches 110 (box top)
+    const { state: next, action } = processCandle(state, makeCandle(0, 113, 114, 109, 113, 10))
+
+    expect(next.status).toBe('IN_TRADE')
+    expect(next.entryFillPrice).toBe(110)
+    expect(action.type).toBe('ENTER_LONG')
+    expect(action.price).toBe(110)
+    expect(action.stopLoss).toBe(110 - 20 * 0.45)
+    expect(action.takeProfit).toBe(110 + 20 * 2)
+  })
+
+  it('IN_TRADE → DONE on take profit', () => {
+    let state = { ...initialState(symbol), date: '2026-03-10' }
+    state = processCandle(state, makeCandle(0, 100, 110, 90, 105)).state
+    state = processCandle(state, makeCandle(0, 108, 115, 107, 112, 5)).state
+    state = processCandle(state, makeCandle(0, 113, 114, 109, 113, 10)).state
+    // TP candle: high hits 150 (TP)
+    const { state: next, action } = processCandle(state, makeCandle(0, 140, 152, 139, 148, 15))
+
+    expect(next.status).toBe('DONE')
+    expect(next.exitReason).toBe('TP')
+    expect(next.pnl).toBe(150 - 110) // 40
+    expect(next.pnlPct).toBeCloseTo((40 / 110) * 100, 2)
+    expect(action.type).toBe('EXIT')
+    expect(action.exitReason).toBe('TP')
+  })
+
+  it('IN_TRADE → DONE on stop loss', () => {
+    let state = { ...initialState(symbol), date: '2026-03-10' }
+    state = processCandle(state, makeCandle(0, 100, 110, 90, 105)).state
+    state = processCandle(state, makeCandle(0, 108, 115, 107, 112, 5)).state
+    state = processCandle(state, makeCandle(0, 113, 114, 109, 113, 10)).state
+    // SL candle: low hits 101 (SL = 110 - 9 = 101)
+    const sl = 110 - 20 * 0.45
+    const { state: next, action } = processCandle(state, makeCandle(0, 108, 109, sl - 1, 100, 15))
+
+    expect(next.status).toBe('DONE')
+    expect(next.exitReason).toBe('SL')
+    expect(next.pnl).toBe(sl - 110) // negative
+    expect(next.pnl!).toBeLessThan(0)
+    expect(action.type).toBe('EXIT')
+    expect(action.exitReason).toBe('SL')
+  })
+})
+
+describe('processCandle — retracement timeout', () => {
+  it('invalidates after MAX_RETRACEMENT_CANDLES (3) without touch', () => {
+    let state = { ...initialState('BTC/USDT'), date: '2026-03-10' }
+    state = processCandle(state, makeCandle(0, 100, 110, 90, 105)).state
+    state = processCandle(state, makeCandle(0, 108, 115, 107, 112, 5)).state
+
+    // 3 candles that don't touch box edge (low > 110)
+    state = processCandle(state, makeCandle(0, 113, 116, 111, 114, 10)).state
+    state = processCandle(state, makeCandle(0, 114, 117, 111, 115, 15)).state
+    const { state: next, action } = processCandle(state, makeCandle(0, 115, 118, 112, 116, 20))
+
+    expect(next.status).toBe('DONE')
+    expect(next.exitReason).toBe('INVALIDATED')
+    expect(action.type).toBe('INVALIDATE')
+  })
+})
+
+describe('processCandle — box too small', () => {
+  it('skips day when box range is below MIN_BOX_RANGE_PCT', () => {
+    let state = { ...initialState('BTC/USDT'), date: '2026-03-10' }
+    // Very tight candle: range = 0.01 on a 100 price → 0.01% (below 0.05%)
+    const { state: next, action } = processCandle(state, makeCandle(0, 100, 100.01, 99.99, 100.005))
+
+    expect(next.status).toBe('DONE')
+    expect(next.exitReason).toBe('INVALIDATED')
+    expect(action.type).toBe('INVALIDATE')
+  })
+})
+
+describe('processCandle — SHORT flow', () => {
+  it('detects SHORT breakout and enters on retracement', () => {
+    let state = { ...initialState('BTC/USDT'), date: '2026-03-10' }
+    state = processCandle(state, makeCandle(0, 100, 110, 90, 95)).state
+    // Close below box bottom (90)
+    state = processCandle(state, makeCandle(0, 92, 93, 85, 88, 5)).state
+
+    expect(state.direction).toBe('SHORT')
+    expect(state.entryPrice).toBe(90) // box bottom
+    expect(state.stopLoss).toBe(90 + 20 * 0.45) // 99
+    expect(state.takeProfit).toBe(90 - 20 * 2) // 50
+
+    // Retracement: high touches 90 (box bottom)
+    const { state: next, action } = processCandle(state, makeCandle(0, 87, 91, 86, 87, 10))
+
+    expect(next.status).toBe('IN_TRADE')
+    expect(action.type).toBe('ENTER_SHORT')
+  })
+})
+
+describe('calcStats', () => {
+  it('computes stats correctly', () => {
+    const trades = [
+      { pnlPct: 5, exitReason: 'TP' },
+      { pnlPct: -2, exitReason: 'SL' },
+      { pnlPct: 3, exitReason: 'TP' },
+      { pnlPct: null, exitReason: 'INVALIDATED' },
+    ]
+    const stats = calcStats(trades)
+
+    expect(stats.total).toBe(4)
+    expect(stats.wins).toBe(2)
+    expect(stats.losses).toBe(1)
+    expect(stats.invalidated).toBe(1)
+    expect(stats.winRate).toBeCloseTo(2 / 3)
+    expect(stats.avgWinPct).toBe(4)
+    expect(stats.avgLossPct).toBe(-2)
+    expect(stats.totalPnlPct).toBe(6)
+    expect(stats.expectancy).toBe(2)
+    expect(stats.largestWinPct).toBe(5)
+    expect(stats.largestLossPct).toBe(-2)
+  })
+
+  it('handles empty trades array', () => {
+    const stats = calcStats([])
+    expect(stats.total).toBe(0)
+    expect(stats.winRate).toBe(0)
   })
 })

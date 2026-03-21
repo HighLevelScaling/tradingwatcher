@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { encrypt } from '@/lib/crypto'
 
 // PATCH /api/trading/exchanges/:id — update name, sandbox, isPrimary, isActive, label
 export async function PATCH(
@@ -23,8 +24,8 @@ export async function PATCH(
   if (isPrimary !== undefined) data.isPrimary = isPrimary
   if (isActive !== undefined) data.isActive = isActive
   if (label !== undefined) data.label = label
-  if (apiKey !== undefined) data.apiKey = apiKey
-  if (secretKey !== undefined) data.secretKey = secretKey
+  if (apiKey !== undefined) data.apiKey = encrypt(apiKey)
+  if (secretKey !== undefined) data.secretKey = encrypt(secretKey)
 
   const exchange = await prisma.tradingExchange.update({
     where: { id },
